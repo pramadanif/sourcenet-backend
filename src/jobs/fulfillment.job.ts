@@ -405,6 +405,7 @@ async function updateDatabase(
   encryptedBlobId: string,
   encryptedEphemeralKey: string,
   txDigest: string,
+  buyerAddress: string,
 ): Promise<void> {
   const startTime = performance.now();
   try {
@@ -443,6 +444,20 @@ async function updateDatabase(
           where: { id: datapodId },
           data: {
             totalSales: { increment: 1 },
+          },
+        });
+
+        // Store transaction audit
+        await prisma.transactionAudit.create({
+          data: {
+            txDigest,
+            txType: 'purchase_completed',
+            userAddress: buyerAddress,
+            datapodId,
+            data: {
+              purchaseId,
+              encryptedBlobId,
+            },
           },
         });
       },
@@ -583,6 +598,7 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
       encryptedBlobId,
       encryptedPayload.encryptedEphemeralKey,
       txDigest,
+      buyer_address,
     );
 
     // Step 7: Emit events

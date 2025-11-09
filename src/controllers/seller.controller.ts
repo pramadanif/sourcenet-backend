@@ -238,10 +238,10 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
       data: {
         txDigest,
         txType: 'publish_datapod',
+        userAddress: seller.zkloginAddress,
         userId: seller.id,
         datapodId: datapod.id,
-        status: 'completed',
-        metadata: { datapodId, kioskId },
+        data: { datapodId, kioskId },
       },
     });
 
@@ -258,7 +258,7 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
     try {
       const { broadcaster } = await import('@/main');
       if (broadcaster) {
-        broadcaster.broadcastEvent({
+        await broadcaster.broadcastEvent({
           type: 'datapod.published',
           data: {
             datapod_id: datapodId,
@@ -268,8 +268,9 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
             seller_address: seller.zkloginAddress,
             kiosk_id: kioskId,
           },
-          timestamp: Date.now(),
+          timestamp: Math.floor(Date.now() / 1000),
           eventId: randomUUID(),
+          blockHeight: 0,
         });
       }
     } catch (wsError) {
@@ -310,6 +311,15 @@ export const getSellerDataPods = async (req: Request, res: Response): Promise<vo
       },
       orderBy: { publishedAt: 'desc' },
       take: 50,
+      include: {
+        seller: {
+          select: {
+            id: true,
+            username: true,
+            averageRating: true,
+          },
+        },
+      },
     });
 
     res.status(200).json({
@@ -342,7 +352,7 @@ export const getSellerStats = async (req: Request, res: Response): Promise<void>
       }),
       totalSales: seller.totalSales,
       totalRevenue: seller.totalRevenue.toString(),
-      averageRating: seller.averageRating.toString(),
+      averageRating: seller.averageRating ? seller.averageRating.toString() : new Decimal(0).toString(),
       reputationScore: seller.reputationScore,
     };
 

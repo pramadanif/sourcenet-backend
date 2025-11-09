@@ -53,9 +53,8 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
 
     // Verify buyer's balance
     try {
-      // BlockchainService.getBalance returns balance in MIST (1 SUI = 1e9 MIST)
       const balance = await BlockchainService.getBalance(buyer_address);
-      const requiredAmount = BigInt(Math.floor(datapod.priceSui.toNumber() * 1e9)) + BigInt(10000000); // Add 0.01 SUI for gas
+      const requiredAmount = BigInt(Math.floor(datapod.priceSui.toNumber() * 1e9)) + BigInt(10000000);
 
       if (balance < requiredAmount) {
         res.status(402).json({
@@ -74,7 +73,6 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       }
     } catch (error) {
       logger.warn('Balance check failed', { error, buyerAddress: buyer_address });
-      // Continue anyway - blockchain might be temporarily unavailable
     }
 
     // Verify buyer_public_key format (X25519 public key = 32 bytes)
@@ -88,18 +86,55 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       throw new ValidationError('Invalid buyer_public_key: must be base64-encoded 32-byte X25519 public key');
     }
 
-    // TODO: Build PTB transaction
-    // For now, create mock transaction
-    const purchaseRequestId = `0x${randomUUID().replace(/-/g, '')}`;
-    const escrowId = `0x${randomUUID().replace(/-/g, '')}`;
-    const txDigest = `0x${randomUUID().replace(/-/g, '')}`;
+    // Build and execute PTB transaction for purchase
+    let txDigest: string;
+    let purchaseRequestId: string;
+    let escrowId: string;
+
+    try {
+      // Build PTB for creating purchase request and escrow
+      const purchaseTx = BlockchainService.buildPurchasePTB(
+        {
+          datapodId: datapod_id,
+          buyer: buyer_address,
+          seller: seller.zkloginAddress,
+          price: Math.floor(datapod.priceSui.toNumber() * 1e9),
+          buyerPublicKey: buyer_public_key,
+          dataHash: datapod.dataHash,
+        },
+        seller.zkloginAddress,
+      );
+
+      // Execute transaction with sponsored gas
+      txDigest = await BlockchainService.executeTransaction(purchaseTx, true);
+
+      // Wait for transaction confirmation
+      await BlockchainService.waitForTransaction(txDigest);
+
+      // Generate deterministic IDs based on transaction digest
+      purchaseRequestId = `0x${txDigest.slice(2, 66)}`;
+      escrowId = `0x${randomUUID().replace(/-/g, '').slice(0, 64)}`;
+
+      logger.info('Purchase transaction executed', {
+        requestId: req.requestId,
+        txDigest,
+        purchaseRequestId,
+        escrowId,
+      });
+    } catch (blockchainError) {
+      logger.error('Failed to execute purchase transaction', {
+        error: blockchainError,
+        requestId: req.requestId,
+      });
+      throw new BlockchainError('Failed to execute purchase transaction');
+    }
 
     // Record in database
     const purchaseRequest = await prisma.purchaseRequest.create({
       data: {
         purchaseRequestId,
         datapodId: datapod.id,
-        buyerId: req.user!.address, // Will need to map to user ID
+        buyerId: req.user!.address,
         buyerAddress: buyer_address,
         sellerAddress: seller.zkloginAddress,
         buyerPublicKey: buyer_public_key,
@@ -116,6 +151,17 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       buyer_address,
       seller.zkloginAddress,
     );
+
+    // Store transaction audit
+    await prisma.transactionAudit.create({
+      data: {
+        txDigest,
+        txType: 'purchase_request',
+        userAddress: req.user!.address,
+        datapodId: datapod.id,
+        data: { purchaseRequestId, escrowId },
+      },
+    });
 
     logger.info('Purchase created', {
       requestId: req.requestId,
@@ -135,7 +181,28 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       });
     } catch (queueError) {
       logger.warn('Failed to queue fulfillment job', { error: queueError });
-      // Continue anyway - job can be retried
+    }
+
+    // Emit WebSocket event
+    try {
+      const { broadcaster } = await import('@/main');
+      if (broadcaster) {
+        await broadcaster.broadcastEvent({
+          type: 'purchase.created',
+          data: {
+            purchase_id: purchaseRequestId,
+            datapod_id: datapod_id,
+            buyer_address: buyer_address,
+            seller_address: seller.zkloginAddress,
+            price_sui: datapod.priceSui.toNumber(),
+          },
+          timestamp: Math.floor(Date.now() / 1000),
+          eventId: randomUUID(),
+          blockHeight: 0,
+        });
+      }
+    } catch (wsError) {
+      logger.warn('Failed to emit WebSocket event', { error: wsError });
     }
 
     res.status(200).json({
@@ -153,8 +220,6 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
 
 /**
  * Get download URL for purchased data
- * GET /api/download/:purchase_id
- * Rate limit: 10 requests/hour per purchase
  */
 export const getDownloadUrl = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -164,7 +229,6 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
       throw new ValidationError('Missing purchase_id');
     }
 
-    // Get purchase request
     const purchase = await prisma.purchaseRequest.findUnique({
       where: { id: purchase_id },
       include: { datapod: true },
@@ -174,17 +238,15 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
       throw new ValidationError('Purchase not found');
     }
 
-    // Verify buyer owns this purchase
     if (purchase.buyerAddress !== req.user!.address) {
       throw new ValidationError('Unauthorized: buyer does not own this purchase');
     }
 
-    // Check purchase status
     if (purchase.status !== 'completed') {
       throw new ValidationError(`Purchase status is ${purchase.status}, expected completed`);
     }
 
-    // Check rate limit: 10 requests/hour per purchase
+    // Check rate limit
     const rateLimitKey = `download:rate:${purchase_id}:${req.user!.address}`;
     const downloadCount = await CacheService.getCachedData<number>(rateLimitKey);
 
@@ -200,23 +262,14 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    logger.info('Download URL requested', {
-      requestId: req.requestId,
-      purchaseId: purchase_id,
-      downloadCount: downloadCount || 0,
-    });
-
-    // Verify encrypted blob exists
     if (!purchase.encryptedBlobId) {
       throw new ValidationError('Encrypted blob not found for this purchase');
     }
 
-    // Generate Walrus blob URL
     const walrusUrl = `https://api.testnet.walrus.io/blobs/${purchase.encryptedBlobId}`;
 
-    // Increment download count (rate limiting)
     const newCount = (downloadCount || 0) + 1;
-    await CacheService.setCachedData(rateLimitKey, newCount, 3600); // 1 hour TTL
+    await CacheService.setCachedData(rateLimitKey, newCount, 3600);
 
     // Log download for audit
     await prisma.transactionAudit.create({
@@ -233,23 +286,20 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
       },
     });
 
-    const response = {
-      status: 'success',
-      blob_id: purchase.encryptedBlobId,
-      walrus_url: walrusUrl,
-      data_hash: purchase.datapod?.dataHash,
-      file_size: 0, // TODO: Add size tracking to schema
-      decryption_key: purchase.decryptionKey,
-      download_count: newCount,
-    };
-
     logger.info('Download URL generated', {
       requestId: req.requestId,
       purchaseId: purchase_id,
       blobId: purchase.encryptedBlobId,
     });
 
-    res.status(200).json(response);
+    res.status(200).json({
+      status: 'success',
+      blob_id: purchase.encryptedBlobId,
+      walrus_url: walrusUrl,
+      data_hash: purchase.datapod?.dataHash,
+      decryption_key: purchase.decryptionKey,
+      download_count: newCount,
+    });
   } catch (error) {
     logger.error('Get download URL failed', { error, requestId: req.requestId });
     throw error;
@@ -272,7 +322,6 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
       throw new ValidationError('Missing buyer_private_key for decryption');
     }
 
-    // Get purchase request
     const purchaseRequest = await prisma.purchaseRequest.findUnique({
       where: { id: purchase_request_id },
       include: { datapod: true },
@@ -286,7 +335,6 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
       throw new ValidationError(`Purchase status is ${purchaseRequest.status}, expected completed`);
     }
 
-    // Verify buyer owns this purchase
     if (purchaseRequest.buyerAddress !== req.user!.address) {
       throw new ValidationError('Unauthorized: buyer does not own this purchase');
     }
@@ -296,19 +344,17 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
       purchaseRequestId: purchase_request_id,
     });
 
-    // Download encrypted blob from Walrus
     if (!purchaseRequest.encryptedBlobId) {
       throw new ValidationError('Encrypted blob not found for this purchase');
     }
 
     const encryptedData = await StorageService.downloadFromWalrus(purchaseRequest.encryptedBlobId);
 
-    // Decrypt data using buyer's private key
     const decryptedData = await EncryptionService.hybridDecrypt(
       purchaseRequest.decryptionKey || '',
       encryptedData.toString('base64'),
-      '', // nonce - would be stored in DB
-      '', // tag - would be stored in DB
+      '',
+      '',
       buyer_private_key,
     );
 
@@ -317,7 +363,6 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
       purchaseRequestId: purchase_request_id,
     });
 
-    // Send file
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader(
       'Content-Disposition',
@@ -358,8 +403,7 @@ export const getBuyerPurchases = async (req: Request, res: Response): Promise<vo
 };
 
 /**
- * Get purchase status with caching (TTL: 5 min)
- * GET /api/buyer/purchase/:purchase_id
+ * Get purchase status with caching
  */
 export const getPurchaseStatus = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -369,16 +413,13 @@ export const getPurchaseStatus = async (req: Request, res: Response): Promise<vo
       throw new ValidationError('Missing purchase_id');
     }
 
-    // Check cache first (5 min TTL)
     const cacheKey = `purchase:status:${purchase_id}`;
     const cached = await CacheService.getCachedData(cacheKey);
     if (cached) {
-      logger.debug('Returning cached purchase status', { requestId: req.requestId });
       res.status(200).json(cached);
       return;
     }
 
-    // Get purchase request
     const purchase = await prisma.purchaseRequest.findUnique({
       where: { id: purchase_id },
       include: {
@@ -397,16 +438,9 @@ export const getPurchaseStatus = async (req: Request, res: Response): Promise<vo
       throw new ValidationError('Purchase not found');
     }
 
-    // Verify buyer owns this purchase
     if (purchase.buyerAddress !== req.user!.address) {
       throw new ValidationError('Unauthorized: buyer does not own this purchase');
     }
-
-    logger.info('Getting purchase status', {
-      requestId: req.requestId,
-      purchaseId: purchase_id,
-      status: purchase.status,
-    });
 
     const response = {
       status: 'success',
@@ -420,7 +454,6 @@ export const getPurchaseStatus = async (req: Request, res: Response): Promise<vo
       completed_at: purchase.completedAt?.toISOString() || null,
     };
 
-    // Cache for 5 minutes
     await CacheService.setCachedData(cacheKey, response, 300);
 
     res.status(200).json(response);
@@ -452,7 +485,6 @@ export const getPurchaseDetails = async (req: Request, res: Response): Promise<v
       throw new ValidationError('Purchase not found');
     }
 
-    // Verify buyer owns this purchase
     if (purchase.buyerAddress !== req.user!.address) {
       throw new ValidationError('Unauthorized: buyer does not own this purchase');
     }
@@ -483,7 +515,6 @@ export const submitReview = async (req: Request, res: Response): Promise<void> =
       throw new ValidationError('Rating must be between 1 and 5');
     }
 
-    // Get purchase request
     const purchase = await prisma.purchaseRequest.findUnique({
       where: { id: purchase_request_id },
       include: { datapod: true },
@@ -497,7 +528,6 @@ export const submitReview = async (req: Request, res: Response): Promise<void> =
       throw new ValidationError('Can only review completed purchases');
     }
 
-    // Verify buyer owns this purchase
     if (purchase.buyerAddress !== req.user!.address) {
       throw new ValidationError('Unauthorized: buyer does not own this purchase');
     }
@@ -508,19 +538,17 @@ export const submitReview = async (req: Request, res: Response): Promise<void> =
       rating,
     });
 
-    // Create review
     const review = await prisma.review.create({
       data: {
         datapodId: purchase.datapod!.id,
         purchaseRequestId: purchase.id,
-        buyerId: req.user!.address, // Will need to map to user ID
+        buyerId: req.user!.address,
         buyerAddress: purchase.buyerAddress,
         rating,
         comment: comment || '',
       },
     });
 
-    // Update DataPod average rating
     const reviews = await prisma.review.findMany({
       where: { datapodId: purchase.datapod!.id },
     });
@@ -534,9 +562,29 @@ export const submitReview = async (req: Request, res: Response): Promise<void> =
       },
     });
 
-    // Invalidate cache
     await CacheService.invalidateDataPodCache(purchase.datapod!.datapodId);
     await CacheService.invalidateMarketplaceCache();
+
+    // Emit WebSocket event
+    try {
+      const { broadcaster } = await import('@/main');
+      if (broadcaster) {
+        await broadcaster.broadcastEvent({
+          type: 'review.added',
+          data: {
+            datapod_id: purchase.datapod!.datapodId,
+            buyer_address: purchase.buyerAddress,
+            rating,
+            comment: comment || '',
+          },
+          timestamp: Math.floor(Date.now() / 1000),
+          eventId: randomUUID(),
+          blockHeight: 0,
+        });
+      }
+    } catch (wsError) {
+      logger.warn('Failed to emit WebSocket event', { error: wsError });
+    }
 
     logger.info('Review submitted', {
       requestId: req.requestId,
