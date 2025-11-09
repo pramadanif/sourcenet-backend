@@ -1,0 +1,284 @@
+import { Request, Response } from 'express';
+import { randomUUID } from 'crypto';
+import prisma from '@/config/database';
+import { logger } from '@/utils/logger';
+import { EncryptionService } from '@/services/encryption.service';
+import { StorageService } from '@/services/storage.service';
+import { BlockchainService } from '@/services/blockchain.service';
+import { CacheService } from '@/services/cache.service';
+import { ValidationError, BlockchainError } from '@/types/errors.types';
+import { Decimal } from '@prisma/client/runtime/library';
+
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
+/**
+ * Upload data endpoint
+ */
+export const uploadData = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { metadata, message, signature } = req.body;
+    const file = req.file;
+
+    if (!file) {
+      throw new ValidationError('No file provided');
+    }
+
+    // Verify file size
+    if (file.size > MAX_FILE_SIZE) {
+      throw new ValidationError(`File size exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`);
+    }
+
+    // Parse and validate metadata
+    let parsedMetadata: any;
+    try {
+      parsedMetadata = typeof metadata === 'string' ? JSON.parse(metadata) : metadata;
+    } catch (error) {
+      throw new ValidationError('Invalid metadata JSON');
+    }
+
+    if (!parsedMetadata.title || !parsedMetadata.category || !parsedMetadata.price_sui) {
+      throw new ValidationError('Missing required metadata fields: title, category, price_sui');
+    }
+
+    // Generate data hash
+    const dataHash = EncryptionService.hashFile(file.buffer);
+
+    logger.info('File uploaded', {
+      requestId: req.requestId,
+      fileName: file.originalname,
+      fileSize: file.size,
+      dataHash,
+    });
+
+    // Generate encryption key and encrypt file
+    const encryptionKey = EncryptionService.generateEncryptionKey();
+    const encryptedData = EncryptionService.encryptFileSimple(file.buffer, encryptionKey);
+
+    // Upload to Walrus storage
+    const uploadedFile = await StorageService.uploadToWalrus(
+      {
+        buffer: encryptedData,
+        originalname: `${randomUUID()}.enc`,
+      },
+      'uploads',
+    );
+
+    logger.info('File uploaded to Walrus', {
+      requestId: req.requestId,
+      cid: uploadedFile.cid,
+    });
+
+    // Extract preview data (first 100 records if JSON)
+    let previewData = '';
+    try {
+      const content = file.buffer.toString('utf-8');
+      const lines = content.split('\n').slice(0, 100);
+      previewData = lines.join('\n');
+    } catch {
+      previewData = 'Binary data - preview not available';
+    }
+
+    // Store in database
+    const uploadId = randomUUID();
+    const seller = await prisma.user.findUnique({
+      where: { zkloginAddress: req.user!.address },
+    });
+
+    if (!seller) {
+      throw new ValidationError('Seller not found');
+    }
+
+    const uploadStaging = await prisma.uploadStaging.create({
+      data: {
+        sellerId: seller.id,
+        datapodId: null, // Will be set after publishing
+        filePath: uploadedFile.url,
+        dataHash,
+        metadata: parsedMetadata,
+        status: 'pending',
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+      },
+    });
+
+    logger.info('Upload staging created', {
+      requestId: req.requestId,
+      uploadId: uploadStaging.id,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      upload_id: uploadStaging.id,
+      data_hash: dataHash,
+      preview_data: previewData.substring(0, 500), // First 500 chars
+      file_size: file.size,
+    });
+  } catch (error) {
+    logger.error('Upload failed', { error, requestId: req.requestId });
+    throw error;
+  }
+};
+
+/**
+ * Publish DataPod endpoint
+ */
+export const publishDataPod = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { upload_id } = req.body;
+
+    if (!upload_id) {
+      throw new ValidationError('Missing upload_id');
+    }
+
+    // Verify upload exists and is pending
+    const uploadStaging = await prisma.uploadStaging.findUnique({
+      where: { id: upload_id },
+    });
+
+    if (!uploadStaging) {
+      throw new ValidationError('Upload not found');
+    }
+
+    if (uploadStaging.status !== 'pending') {
+      throw new ValidationError(`Upload status is ${uploadStaging.status}, expected pending`);
+    }
+
+    // Verify seller owns this upload
+    const seller = await prisma.user.findUnique({
+      where: { zkloginAddress: req.user!.address },
+    });
+
+    if (!seller || uploadStaging.sellerId !== seller.id) {
+      throw new ValidationError('Unauthorized: seller does not own this upload');
+    }
+
+    const metadata = uploadStaging.metadata as any;
+
+    logger.info('Publishing DataPod', {
+      requestId: req.requestId,
+      uploadId: upload_id,
+      title: metadata.title,
+    });
+
+    // TODO: Build PTB transaction
+    // For now, create mock transaction
+    const datapodId = `0x${randomUUID().replace(/-/g, '')}`;
+    const kioskId = `0x${randomUUID().replace(/-/g, '')}`;
+    const txDigest = `0x${randomUUID().replace(/-/g, '')}`;
+
+    // Update upload staging
+    await prisma.uploadStaging.update({
+      where: { id: upload_id },
+      data: {
+        status: 'published',
+      },
+    });
+
+    // Create DataPod record
+    const datapod = await prisma.dataPod.create({
+      data: {
+        datapodId,
+        sellerId: seller.id,
+        title: metadata.title,
+        description: metadata.description || '',
+        category: metadata.category,
+        tags: metadata.tags || [],
+        priceSui: new Decimal(metadata.price_sui),
+        dataHash: uploadStaging.dataHash,
+        totalSales: 0,
+        averageRating: new Decimal(0),
+        status: 'published',
+        blobId: uploadStaging.filePath,
+        kioskId,
+        publishedAt: new Date(),
+      },
+    });
+
+    logger.info('DataPod published', {
+      requestId: req.requestId,
+      datapodId,
+      kioskId,
+    });
+
+    // Invalidate marketplace cache
+    await CacheService.invalidateMarketplaceCache();
+
+    // TODO: Emit WebSocket event for real-time updates
+
+    res.status(200).json({
+      status: 'success',
+      datapod_id: datapodId,
+      kiosk_id: kioskId,
+      tx_digest: txDigest,
+      message: 'DataPod published successfully',
+    });
+  } catch (error) {
+    logger.error('Publish failed', { error, requestId: req.requestId });
+    throw error;
+  }
+};
+
+/**
+ * Get seller's DataPods
+ */
+export const getSellerDataPods = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const seller = await prisma.user.findUnique({
+      where: { zkloginAddress: req.user!.address },
+    });
+
+    if (!seller) {
+      throw new ValidationError('Seller not found');
+    }
+
+    const datapods = await prisma.dataPod.findMany({
+      where: {
+        sellerId: seller.id,
+        deletedAt: null,
+      },
+      orderBy: { publishedAt: 'desc' },
+      take: 50,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      count: datapods.length,
+      datapods,
+    });
+  } catch (error) {
+    logger.error('Get seller DataPods failed', { error, requestId: req.requestId });
+    throw error;
+  }
+};
+
+/**
+ * Get seller stats
+ */
+export const getSellerStats = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const seller = await prisma.user.findUnique({
+      where: { zkloginAddress: req.user!.address },
+    });
+
+    if (!seller) {
+      throw new ValidationError('Seller not found');
+    }
+
+    const stats = {
+      totalDataPods: await prisma.dataPod.count({
+        where: { sellerId: seller.id, deletedAt: null },
+      }),
+      totalSales: seller.totalSales,
+      totalRevenue: seller.totalRevenue.toString(),
+      averageRating: seller.averageRating.toString(),
+      reputationScore: seller.reputationScore,
+    };
+
+    res.status(200).json({
+      status: 'success',
+      stats,
+    });
+  } catch (error) {
+    logger.error('Get seller stats failed', { error, requestId: req.requestId });
+    throw error;
+  }
+};

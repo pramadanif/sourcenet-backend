@@ -1,0 +1,208 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Seed configuration
+generator seed {
+  provider = "prisma-client-js"
+  seed     = "prisma/seed.ts"
+}
+
+// User model for seller/buyer profiles
+model User {
+  id                String   @id @default(uuid()) @db.Uuid
+  zkloginAddress    String   @unique @map("zklogin_address")
+  googleEmail       String?  @unique @map("google_email")
+  username          String?  @unique
+  bio               String?
+  avatarUrl         String?  @map("avatar_url")
+  websiteUrl        String?  @map("website_url")
+  totalSales        Int      @default(0) @map("total_sales")
+  totalRevenue      Decimal  @default(0) @db.Decimal(20, 9) @map("total_revenue")
+  averageRating     Decimal? @db.Decimal(3, 2) @map("average_rating")
+  reputationScore   Int      @default(0) @map("reputation_score")
+  isVerified        Boolean  @default(false) @map("is_verified")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  dataPods          DataPod[]
+  purchaseRequests  PurchaseRequest[] @relation("buyer")
+  reviews           Review[]
+  uploadStagings    UploadStaging[]
+  escrowTransactions EscrowTransaction[] @relation("seller")
+  transactionAudits TransactionAudit[]
+
+  @@index([zkloginAddress])
+  @@index([createdAt])
+  @@map("users")
+}
+
+// DataPod model for marketplace listings
+model DataPod {
+  id                String   @id @default(uuid()) @db.Uuid
+  datapodId         String   @unique @map("datapod_id") // On-chain ID
+  sellerId          String   @db.Uuid @map("seller_id")
+  title             String   @db.VarChar(200)
+  description       String?  @db.Text
+  category          String   @db.VarChar(50) @map("category")
+  tags              String[] @default([])
+  priceSui          Decimal  @db.Decimal(20, 9) @map("price_sui")
+  dataHash          String   @unique @map("data_hash")
+  totalSales        Int      @default(0) @map("total_sales")
+  averageRating     Decimal? @db.Decimal(3, 2) @map("average_rating")
+  status            String   @default("draft") @map("status") // draft, published, delisted
+  blobId            String   @unique @map("blob_id") // Walrus blob ID
+  kioskId           String?  @map("kiosk_id") // Sui Kiosk ID
+  publishedAt       DateTime? @map("published_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  deletedAt         DateTime? @map("deleted_at") // Soft delete
+
+  // Relations
+  seller            User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  purchaseRequests  PurchaseRequest[]
+  reviews           Review[]
+  uploadStaging     UploadStaging?
+  transactionAudits TransactionAudit[]
+
+  @@index([category, status, publishedAt])
+  @@index([sellerId])
+  @@index([priceSui])
+  @@index([status])
+  @@index([publishedAt])
+  @@fulltext([title])
+  @@map("data_pods")
+}
+
+// PurchaseRequest model for transactions
+model PurchaseRequest {
+  id                    String   @id @default(uuid()) @db.Uuid
+  purchaseRequestId     String   @unique @map("purchase_request_id") // On-chain ID
+  datapodId             String   @db.Uuid @map("datapod_id")
+  buyerId               String   @db.Uuid @map("buyer_id")
+  buyerAddress          String   @map("buyer_address") // Sui address
+  sellerAddress         String   @map("seller_address") // Sui address
+  buyerPublicKey        String   @map("buyer_public_key") // For encryption
+  priceSui              Decimal  @db.Decimal(20, 9) @map("price_sui")
+  status                String   @default("pending") @map("status") // pending, completed, refunded, disputed
+  encryptedBlobId       String?  @map("encrypted_blob_id") // Encrypted data blob
+  decryptionKey         String?  @map("decryption_key") // Encrypted key for buyer
+  txDigest              String?  @map("tx_digest") // Blockchain transaction digest
+  completedAt           DateTime? @map("completed_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  datapod               DataPod  @relation(fields: [datapodId], references: [id], onDelete: Cascade)
+  buyer                 User     @relation("buyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  escrowTransaction     EscrowTransaction?
+  review                Review?
+
+  @@index([buyerAddress, status])
+  @@index([sellerAddress])
+  @@index([datapodId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("purchase_requests")
+}
+
+// Review model for ratings
+model Review {
+  id                String   @id @default(uuid()) @db.Uuid
+  datapodId         String   @db.Uuid @map("datapod_id")
+  purchaseRequestId String   @db.Uuid @unique @map("purchase_request_id")
+  buyerId           String   @db.Uuid @map("buyer_id")
+  buyerAddress      String   @map("buyer_address")
+  rating            Int      @map("rating") // 1-5
+  comment           String?  @db.Text
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  datapod           DataPod  @relation(fields: [datapodId], references: [id], onDelete: Cascade)
+  purchaseRequest   PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  buyer             User     @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+
+  @@unique([datapodId, buyerId])
+  @@index([datapodId])
+  @@index([buyerAddress])
+  @@index([createdAt])
+  @@map("reviews")
+}
+
+// UploadStaging model for temporary file storage
+model UploadStaging {
+  id                String   @id @default(uuid()) @db.Uuid
+  sellerId          String   @db.Uuid @map("seller_id")
+  datapodId         String?  @db.Uuid @unique @map("datapod_id")
+  filePath          String   @map("file_path") // S3 or Walrus path
+  dataHash          String   @unique @map("data_hash")
+  metadata          Json?    @map("metadata") // File metadata
+  status            String   @default("pending") @map("status") // pending, published, expired
+  expiresAt         DateTime @map("expires_at") // Auto-cleanup
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  seller            User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  datapod           DataPod? @relation(fields: [datapodId], references: [id], onDelete: SetNull)
+
+  @@index([sellerId])
+  @@index([expiresAt])
+  @@index([status])
+  @@map("upload_stagings")
+}
+
+// EscrowTransaction model for payment escrow
+model EscrowTransaction {
+  id                    String   @id @default(uuid()) @db.Uuid
+  purchaseRequestId     String   @db.Uuid @unique @map("purchase_request_id")
+  sellerId              String   @db.Uuid @map("seller_id")
+  sellerAddress         String   @map("seller_address")
+  buyerAddress          String   @map("buyer_address")
+  amountSui             Decimal  @db.Decimal(20, 9) @map("amount_sui")
+  status                String   @default("holding") @map("status") // holding, released, refunded
+  txDigest              String?  @map("tx_digest") // Blockchain transaction
+  releasedAt            DateTime? @map("released_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  purchaseRequest       PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  seller                User     @relation("seller", fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerAddress])
+  @@index([buyerAddress])
+  @@index([status])
+  @@index([createdAt])
+  @@map("escrow_transactions")
+}
+
+// TransactionAudit model for compliance
+model TransactionAudit {
+  id                String   @id @default(uuid()) @db.Uuid
+  txType            String   @map("tx_type") // publish, purchase, review, etc.
+  txDigest          String?  @map("tx_digest") // Blockchain transaction digest
+  userAddress       String   @map("user_address")
+  userId            String?  @db.Uuid @map("user_id")
+  datapodId         String?  @db.Uuid @map("datapod_id")
+  data              Json?    @map("data") // Transaction details
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user              User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  datapod           DataPod? @relation(fields: [datapodId], references: [id], onDelete: SetNull)
+
+  @@index([userAddress])
+  @@index([userId])
+  @@index([txType])
+  @@index([createdAt])
+  @@map("transaction_audits")
+}
