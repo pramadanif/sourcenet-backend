@@ -79,7 +79,7 @@ model DataPod {
   @@index([priceSui])
   @@index([status])
   @@index([publishedAt])
-  @@fulltext([title])
+  @@index([title])
   @@map("data_pods")
 }
 
@@ -205,4 +205,13 @@ model TransactionAudit {
   @@index([txType])
   @@index([createdAt])
   @@map("transaction_audits")
+}
+
+// Indexer checkpoint for tracking event processing state
+model IndexerCheckpoint {
+  id        String   @id @default("indexer-checkpoint")
+  data      Json     @map("data") // Stores checkpoint state as JSON
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("indexer_checkpoints")
 }

@@ -9,9 +9,15 @@ import routes from '@/routes';
 import { startFulfillmentWorker, shutdownFulfillmentQueue } from '@/jobs/fulfillment.job';
 import { BlockchainService } from '@/services/blockchain.service';
 import { CacheService } from '@/services/cache.service';
+import { WebSocketServerManager } from '@/websocket/websocket.server';
+import { WebSocketBroadcaster } from '@/websocket/websocket.broadcaster';
 
 const app = express();
 const PORT = env.PORT || 3000;
+
+// Initialize WebSocket broadcaster and server
+const broadcaster = new WebSocketBroadcaster();
+let wsServer: WebSocketServerManager | null = null;
 
 // Middleware
 app.use(helmet());
@@ -99,6 +105,11 @@ const startServer = async () => {
     await startFulfillmentWorker();
     logger.info('Fulfillment worker started');
 
+    // Start WebSocket server
+    wsServer = new WebSocketServerManager(broadcaster);
+    await wsServer.start();
+    logger.info('WebSocket server started');
+
     // Start Express server
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
@@ -112,6 +123,9 @@ const startServer = async () => {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
+  if (wsServer) {
+    await wsServer.shutdown();
+  }
   await shutdownFulfillmentQueue();
   await CacheService.disconnect();
   process.exit(0);
@@ -119,6 +133,9 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully');
+  if (wsServer) {
+    await wsServer.shutdown();
+  }
   await shutdownFulfillmentQueue();
   await CacheService.disconnect();
   process.exit(0);
@@ -127,4 +144,5 @@ process.on('SIGINT', async () => {
 // Start the server
 startServer();
 
+export { app, broadcaster, wsServer };
 export default app;

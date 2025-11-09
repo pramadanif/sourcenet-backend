@@ -113,6 +113,13 @@ export class WalrusService {
   }
 
   /**
+   * Get blob from Walrus (alias for downloadBlob)
+   */
+  static async getBlob(blobId: string): Promise<Buffer> {
+    return this.downloadBlob(blobId);
+  }
+
+  /**
    * Download encrypted blob from Walrus
    */
   static async downloadBlob(blobId: string): Promise<Buffer> {

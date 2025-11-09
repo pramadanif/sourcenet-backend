@@ -93,6 +93,19 @@ export class EncryptionService {
   }
 
   /**
+   * Decrypt data (alias for hybridDecrypt)
+   */
+  static async decryptData(
+    encryptedEphemeralKeyB64: string,
+    encryptedDataB64: string,
+    nonceB64: string,
+    tagB64: string,
+    buyerPrivateKeyB64: string,
+  ): Promise<Buffer> {
+    return this.hybridDecrypt(encryptedEphemeralKeyB64, encryptedDataB64, nonceB64, tagB64, buyerPrivateKeyB64);
+  }
+
+  /**
    * Hybrid decryption: Reverse of hybridEncrypt
    * Buyer decrypts data with their private key
    */

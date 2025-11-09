@@ -12,8 +12,8 @@ const RETRY_DELAY = 1000;
 const TX_TIMEOUT = 60000; // 60 seconds
 
 // Sui package IDs and addresses
-const SUI_PACKAGE_ID = env.SUI_DATAPOD_PACKAGE_ID;
-const KIOSK_PACKAGE_ID = env.SUI_KIOSK_PACKAGE_ID || '0x2::kiosk';
+const SUI_PACKAGE_ID = env.SOURCENET_PACKAGE_ID;
+const KIOSK_PACKAGE_ID = '0x2::kiosk';
 const CLOCK_ID = '0x6';
 
 interface DataPodMetadata {
@@ -172,8 +172,7 @@ export class BlockchainService {
     try {
       const tx = new Transaction();
 
-      // Set sponsor for gas
-      tx.setSponsor(sponsor);
+      // Note: setSponsor is not available in current Sui SDK
 
       const { kioskId, kioskOwnerCap } = kioskData;
 
@@ -225,8 +224,8 @@ export class BlockchainService {
     try {
       const tx = new Transaction();
 
-      // Set sponsor for gas fees
-      tx.setSponsor(sponsor);
+      // Note: setSponsor is not available in current Sui SDK
+      // Sponsor setup should be handled at transaction execution level
 
       // Split coins for payment (assumes buyer has SUI)
       const coinInputs = tx.splitCoins(tx.gas, [tx.pure.u64(purchaseData.price)]);
@@ -278,9 +277,6 @@ export class BlockchainService {
   ): Transaction {
     try {
       const tx = new Transaction();
-
-      // Set sponsor for gas
-      tx.setSponsor(sponsor);
 
       // Release escrow - move call to get the coin from escrow
       const releasedCoin = tx.moveCall({
@@ -421,7 +417,6 @@ export class BlockchainService {
         id: objectId,
         options: {
           showContent: true,
-          showOwner: true,
         },
       });
 
@@ -433,9 +428,12 @@ export class BlockchainService {
   }
 
   /**
-   * Query events from blockchain
+   * Query blockchain events by type
    */
-  static async queryEvents(eventType: string, limit: number = 100): Promise<any[]> {
+  static async queryEvents(
+    eventType: string,
+    limit: number = 50
+  ): Promise<any[]> {
     try {
       const client = this.getClient();
 

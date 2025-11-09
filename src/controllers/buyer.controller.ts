@@ -53,6 +53,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
 
     // Verify buyer's balance
     try {
+      // BlockchainService.getBalance returns balance in MIST (1 SUI = 1e9 MIST)
       const balance = await BlockchainService.getBalance(buyer_address);
       const requiredAmount = BigInt(Math.floor(datapod.priceSui.toNumber() * 1e9)) + BigInt(10000000); // Add 0.01 SUI for gas
 
