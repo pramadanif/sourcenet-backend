@@ -385,3 +385,422 @@ The implementation is well-architected and follows the flow summary closely. All
 **One critical issue** blocks the fulfillment flow: **the seller's encryption key is not persisted**. Once this is fixed, the system should work end-to-end.
 
 **Estimated time to production-ready**: 1-2 hours (after critical fix)
+
+---
+
+# 🔗 SMART CONTRACT ANALYSIS
+
+## ✅ CONTRACT STRUCTURE (Score: 9/10)
+
+### Module 1: `datapod.move` ✅
+**Purpose**: Manage data pod listings
+
+**Structs**:
+- `DataPod`: Represents a data listing
+  - ✅ Stores: title, category, price, data_hash, blob_id, kiosk_id
+  - ✅ Status tracking: draft (0), published (1), delisted (2)
+  - ✅ Metadata: seller, created_at, published_at, total_sales, average_rating
+- `DataPodOwnerCap`: Ownership capability for authorization
+
+**Functions**:
+- ✅ `create_datapod()`: Create new listing
+- ✅ `publish_datapod()`: Publish to marketplace
+- ✅ `delist_datapod()`: Remove from marketplace
+- ✅ `update_price()`: Update price
+- ✅ `increment_sales()`: Track sales count
+- ✅ `update_rating()`: Update average rating
+- ✅ Getter functions: get_seller, get_price, get_status, etc.
+
+**Events**:
+- ✅ `DataPodCreated`: Emitted on creation
+- ✅ `DataPodPublished`: Emitted on publish
+- ✅ `DataPodDelisted`: Emitted on delist
+- ✅ `DataPodPriceUpdated`: Emitted on price change
+
+**Alignment with Backend**:
+- ✅ Matches `seller.controller.ts` flow
+- ✅ Status values align with DB schema
+- ✅ Events correspond to audit logging
+
+---
+
+### Module 2: `purchase.move` ✅
+**Purpose**: Manage purchase requests
+
+**Structs**:
+- `PurchaseRequest`: Represents a purchase transaction
+  - ✅ Stores: purchase_id, datapod_id, buyer, seller, buyer_public_key
+  - ✅ Status tracking: pending (0), completed (1), refunded (2), disputed (3)
+  - ✅ Metadata: price_sui, data_hash, created_at, completed_at
+- `PurchaseOwnerCap`: Ownership capability
+
+**Functions**:
+- ✅ `create_purchase()`: Create purchase request
+- ✅ `complete_purchase()`: Mark as completed
+- ✅ `refund_purchase()`: Refund transaction
+- ✅ `dispute_purchase()`: Mark as disputed
+- ✅ Getter functions
+
+**Events**:
+- ✅ `PurchaseCreated`: Emitted on creation
+- ✅ `PurchaseCompleted`: Emitted on completion
+- ✅ `PurchaseRefunded`: Emitted on refund
+- ✅ `PurchaseDisputed`: Emitted on dispute
+
+**Alignment with Backend**:
+- ✅ Matches `buyer.controller.ts` flow
+- ✅ Status values align with DB schema
+- ✅ Stores buyer_public_key for encryption
+
+---
+
+### Module 3: `escrow.move` ⚠️
+**Purpose**: Handle payment escrow
+
+**Structs**:
+- `Escrow`: Holds payment in trust
+  - ✅ Stores: purchase_id, buyer, seller, amount, data_hash
+  - ✅ Status tracking: pending (0), released (1), refunded (2)
+- `EscrowOwnerCap`: Ownership capability
+
+**Functions**:
+- ✅ `create_escrow()`: Create escrow with coin
+- ⚠️ `release_escrow()`: Release to seller
+  - **ISSUE**: Returns zero coin instead of actual amount
+  - **Line 120-121**: `coin::zero<SUI>(ctx)` creates empty coin
+  - Should transfer actual escrow amount
+- ⚠️ `refund_escrow()`: Refund to buyer
+  - **ISSUE**: Same problem - returns zero coin
+
+**Events**:
+- ✅ `EscrowCreated`: Emitted on creation
+- ✅ `EscrowReleased`: Emitted on release
+- ✅ `EscrowRefunded`: Emitted on refund
+
+**Alignment with Backend**:
+- ✅ Matches `payment.service.ts` flow
+- ⚠️ Coin transfer logic needs fixing
+
+---
+
+## 🔴 ISSUES FOUND IN SMART CONTRACTS
+
+### Issue #1: Escrow Coin Transfer Logic
+**Severity**: 🔴 CRITICAL
+**Location**: `escrow.move` lines 120-121, 142-143
+
+**Problem**:
+```move
+public fun release_escrow(...): Coin<SUI> {
+    // ...
+    let coin = coin::zero<SUI>(ctx);  // ❌ Creates EMPTY coin
+    coin
+}
+```
+
+**Impact**: 
+- Seller receives 0 SUI instead of payment
+- Escrow amount is lost
+- Payment flow breaks
+
+**Solution**:
+```move
+public fun release_escrow(
+    escrow: &mut Escrow,
+    seller_address: address,
+    ctx: &mut TxContext,
+): Coin<SUI> {
+    assert!(escrow.status == 0, EInvalidStatus);
+    
+    escrow.status = 1; // released
+    
+    event::emit(EscrowReleased {
+        escrow_id: object::uid_to_address(&escrow.id),
+        seller: seller_address,
+        amount: escrow.amount,
+    });
+    
+    // Create coin with actual amount
+    let coin = coin::from_balance<SUI>(
+        balance::split(&mut escrow.balance, escrow.amount),
+        ctx
+    );
+    coin
+}
+```
+
+**Note**: Requires adding `balance` field to Escrow struct
+
+---
+
+### Issue #2: Escrow Coin Storage
+**Severity**: 🟡 MEDIUM
+**Location**: `escrow.move` line 97
+
+**Problem**:
+```move
+transfer::public_transfer(coin, escrow_addr);  // ❌ Transfers to escrow address
+```
+
+**Issue**: Coin is transferred to escrow object address, not stored in Escrow struct
+
+**Solution**: Store coin in Escrow struct
+```move
+public struct Escrow has key, store {
+    id: UID,
+    // ... other fields ...
+    coin: Coin<SUI>,  // ✅ Add this
+}
+```
+
+---
+
+## ✅ OVERALL SMART CONTRACT SCORE: 7/10
+
+| Component | Score | Status | Notes |
+|-----------|-------|--------|-------|
+| DataPod Module | 10/10 | ✅ | Complete & correct |
+| Purchase Module | 10/10 | ✅ | Complete & correct |
+| Escrow Module | 4/10 | 🔴 | Coin transfer broken |
+| **OVERALL** | **7/10** | ⚠️ | **Needs escrow fix** |
+
+---
+
+# 🚀 DEPLOYMENT GUIDE TO SUI TESTNET
+
+## Prerequisites
+✅ You have Sui CLI installed
+
+## Step 1: Setup Sui CLI
+
+```bash
+# Check Sui CLI version
+sui --version
+
+# Should output: sui 1.x.x or higher
+```
+
+## Step 2: Configure Testnet
+
+```bash
+# Add testnet environment
+sui client envs
+
+# If testnet not listed, add it:
+sui client new-env --alias testnet --rpc https://fullnode.testnet.sui.io:443
+
+# Switch to testnet
+sui client switch --env testnet
+
+# Verify you're on testnet
+sui client active-env
+# Should output: testnet
+```
+
+## Step 3: Create/Import Wallet
+
+```bash
+# List existing addresses
+sui client addresses
+
+# If no address, create new one:
+sui client new-address ed25519
+
+# Set active address
+sui client switch --address <YOUR_ADDRESS>
+
+# Get testnet SUI faucet (for gas fees)
+# Visit: https://discord.gg/sui
+# Use !faucet command in #testnet-faucet channel
+```
+
+## Step 4: Build Smart Contracts
+
+```bash
+# Navigate to contract directory
+cd contracts/escrow
+
+# Build contracts
+sui move build
+
+# Should output:
+# Compiling sourcenet_escrow
+# Finished `dev` profile
+```
+
+## Step 5: Fix Escrow Contract (CRITICAL)
+
+**Before deployment, fix the escrow coin transfer issue:**
+
+```bash
+# Edit escrow.move
+vim sources/escrow.move
+```
+
+**Replace lines 13-22 (Escrow struct)**:
+```move
+public struct Escrow has key, store {
+    id: UID,
+    purchase_id: String,
+    buyer: address,
+    seller: address,
+    amount: u64,
+    data_hash: String,
+    status: u8,
+    created_at: u64,
+    coin: Coin<SUI>,  // ✅ ADD THIS
+}
+```
+
+**Replace lines 96-97 (create_escrow function)**:
+```move
+let escrow = Escrow {
+    id: escrow_id,
+    purchase_id: purchase_id,
+    buyer: buyer,
+    seller: seller,
+    amount: amount,
+    data_hash: data_hash,
+    status: 0,
+    created_at: tx_context::epoch(ctx),
+    coin: coin,  // ✅ STORE COIN
+};
+
+// Remove: transfer::public_transfer(coin, escrow_addr);
+```
+
+**Replace lines 102-122 (release_escrow function)**:
+```move
+public fun release_escrow(
+    escrow: &mut Escrow,
+    seller_address: address,
+    ctx: &mut TxContext,
+) {
+    assert!(escrow.status == 0, EInvalidStatus);
+    assert!(tx_context::sender(ctx) == escrow.seller || tx_context::sender(ctx) == escrow.buyer, EUnauthorized);
+    
+    escrow.status = 1;
+    
+    event::emit(EscrowReleased {
+        escrow_id: object::uid_to_address(&escrow.id),
+        seller: seller_address,
+        amount: escrow.amount,
+    });
+    
+    // Transfer coin to seller
+    transfer::public_transfer(escrow.coin, seller_address);
+}
+```
+
+**Replace lines 124-144 (refund_escrow function)**:
+```move
+public fun refund_escrow(
+    escrow: &mut Escrow,
+    buyer_address: address,
+    ctx: &mut TxContext,
+) {
+    assert!(escrow.status == 0, EInvalidStatus);
+    assert!(tx_context::sender(ctx) == escrow.seller || tx_context::sender(ctx) == escrow.buyer, EUnauthorized);
+    
+    escrow.status = 2;
+    
+    event::emit(EscrowRefunded {
+        escrow_id: object::uid_to_address(&escrow.id),
+        buyer: buyer_address,
+        amount: escrow.amount,
+    });
+    
+    // Transfer coin to buyer
+    transfer::public_transfer(escrow.coin, buyer_address);
+}
+```
+
+**Rebuild after fixes**:
+```bash
+sui move build
+```
+
+## Step 6: Deploy to Testnet
+
+```bash
+# Publish package
+sui client publish --gas-budget 100000000
+
+# Output will show:
+# ✓ Transaction Digest: 0x...
+# ✓ Package ID: 0x...
+
+# SAVE THE PACKAGE ID - you'll need it for backend config
+```
+
+## Step 7: Configure Backend
+
+**Update `.env` file**:
+```bash
+# Add to .env
+SUI_PACKAGE_ID=0x<YOUR_PACKAGE_ID>
+SUI_TESTNET_RPC=https://fullnode.testnet.sui.io:443
+SUI_SPONSOR_ADDRESS=0x<YOUR_ADDRESS>
+```
+
+**Update `src/config/blockchain.ts`**:
+```typescript
+export const BLOCKCHAIN_CONFIG = {
+  packageId: env.SUI_PACKAGE_ID,
+  rpcUrl: env.SUI_TESTNET_RPC,
+  sponsorAddress: env.SUI_SPONSOR_ADDRESS,
+  // ...
+};
+```
+
+## Step 8: Verify Deployment
+
+```bash
+# Check package on testnet
+sui client object <PACKAGE_ID>
+
+# Should show:
+# ObjectID: 0x...
+# Version: 1
+# Digest: 0x...
+```
+
+## Step 9: Test Smart Contracts
+
+```bash
+# Create test transaction
+sui client call \
+  --package <PACKAGE_ID> \
+  --module datapod \
+  --function create_datapod \
+  --args "test_id" "Test Title" "category" "desc" "1000000000" "hash" "blob_id" \
+  --gas-budget 10000000
+```
+
+---
+
+## ✅ DEPLOYMENT CHECKLIST
+
+- [ ] Sui CLI installed and working
+- [ ] Testnet configured
+- [ ] Wallet created with testnet SUI
+- [ ] **Escrow contract fixed** (CRITICAL)
+- [ ] Contracts build successfully
+- [ ] Deployed to testnet
+- [ ] Package ID saved
+- [ ] Backend `.env` updated
+- [ ] Test transactions successful
+
+---
+
+## 📝 SUMMARY
+
+**Smart Contract Status**: 7/10 - Ready after escrow fix
+**Deployment Status**: Ready to deploy
+**Estimated Time**: 30 minutes (including escrow fix)
+
+**Next Steps**:
+1. ✅ Fix escrow coin transfer logic
+2. ✅ Build and deploy to testnet
+3. ✅ Update backend configuration
+4. ✅ Run end-to-end tests

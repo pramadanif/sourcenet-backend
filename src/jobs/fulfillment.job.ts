@@ -1,5 +1,6 @@
 import { Queue, Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
+import { randomUUID } from 'crypto';
 import prisma from '@/config/database';
 import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
@@ -539,17 +540,79 @@ async function updateDatabase(
 /**
  * Step 7: Emit events
  */
-async function emitEvents(purchaseId: string, datapodId: string): Promise<void> {
+async function emitEvents(
+  purchaseId: string,
+  datapodId: string,
+  buyerAddress: string,
+  sellerAddress: string,
+  priceSui: number,
+): Promise<void> {
   const startTime = performance.now();
   try {
-    // Queue notification job
-    logger.debug(`[purchase:${purchaseId}] Queueing notification job`);
+    // Get purchase and datapod details
+    const purchase = await prisma.purchaseRequest.findUnique({
+      where: { id: purchaseId },
+      include: { datapod: true },
+    });
 
-    // Queue stats job
-    logger.debug(`[purchase:${purchaseId}] Queueing stats job`);
+    if (!purchase) {
+      throw new Error('Purchase not found for event emission');
+    }
 
-    // Emit WebSocket event
-    logger.debug(`[purchase:${purchaseId}] Emitting WebSocket event: purchase.completed`);
+    // Emit WebSocket event - purchase completed
+    try {
+      const { broadcaster } = await import('@/main');
+      if (broadcaster) {
+        await broadcaster.broadcastEvent({
+          type: 'purchase.completed',
+          data: {
+            purchase_id: purchase.purchaseRequestId,
+            datapod_id: datapodId,
+            buyer_address: buyerAddress,
+            seller_address: sellerAddress,
+            status: 'completed',
+          },
+          timestamp: Math.floor(Date.now() / 1000),
+          eventId: randomUUID(),
+          blockHeight: 0,
+        });
+
+        // Emit WebSocket event - payment released
+        await broadcaster.broadcastEvent({
+          type: 'payment.released',
+          data: {
+            seller_address: sellerAddress,
+            amount_sui: priceSui,
+            purchase_id: purchase.purchaseRequestId,
+          },
+          timestamp: Math.floor(Date.now() / 1000),
+          eventId: randomUUID(),
+          blockHeight: 0,
+        });
+
+        logger.info(`[purchase:${purchaseId}] WebSocket events emitted successfully`);
+      }
+    } catch (wsError) {
+      logger.warn(`[purchase:${purchaseId}] Failed to emit WebSocket event`, { error: wsError });
+    }
+
+    // Queue notification job (async, non-blocking)
+    try {
+      logger.debug(`[purchase:${purchaseId}] Queueing notification job`);
+      // TODO: Queue notification job to send email/push notification to buyer and seller
+      // Example: await notificationQueue.add('send-purchase-notification', { purchaseId, buyerAddress, sellerAddress });
+    } catch (notifError) {
+      logger.warn(`[purchase:${purchaseId}] Failed to queue notification job`, { error: notifError });
+    }
+
+    // Queue stats job (async, non-blocking)
+    try {
+      logger.debug(`[purchase:${purchaseId}] Queueing stats job`);
+      // TODO: Queue stats job to update seller statistics
+      // Example: await statsQueue.add('update-seller-stats', { sellerAddress, datapodId });
+    } catch (statsError) {
+      logger.warn(`[purchase:${purchaseId}] Failed to queue stats job`, { error: statsError });
+    }
 
     const duration = performance.now() - startTime;
     logStep(purchaseId, {
@@ -557,6 +620,8 @@ async function emitEvents(purchaseId: string, datapodId: string): Promise<void> 
       duration: Math.round(duration),
       success: true,
     });
+
+    logger.info(`[purchase:${purchaseId}] Events emitted successfully`);
   } catch (error) {
     const duration = performance.now() - startTime;
     logStep(purchaseId, {
@@ -565,7 +630,7 @@ async function emitEvents(purchaseId: string, datapodId: string): Promise<void> 
       success: false,
     });
     logger.warn(`[purchase:${purchaseId}] Event emission failed (non-blocking)`, { error });
-    // Non-blocking: continue even if events fail
+    // Don't throw - event emission is non-critical
   }
 }
 
@@ -666,7 +731,7 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
     );
 
     // Step 7: Emit events
-    await emitEvents(purchase_id, datapod_id);
+    await emitEvents(purchase_id, datapod_id, buyer_address, seller_address, price_sui);
 
     // Step 8: Cleanup memory
     await cleanupMemory(purchase_id);

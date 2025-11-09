@@ -358,9 +358,18 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
       buyer_private_key,
     );
 
-    logger.info('Data decrypted successfully', {
+    // Verify data integrity by checking hash
+    const decryptedHash = EncryptionService.hashFile(decryptedData);
+    if (decryptedHash !== purchaseRequest.datapod?.dataHash) {
+      throw new ValidationError(
+        `Data integrity check failed. Expected hash: ${purchaseRequest.datapod?.dataHash}, got: ${decryptedHash}`,
+      );
+    }
+
+    logger.info('Data decrypted and verified successfully', {
       requestId: req.requestId,
       purchaseRequestId: purchase_request_id,
+      dataHash: decryptedHash,
     });
 
     res.setHeader('Content-Type', 'application/octet-stream');
@@ -368,17 +377,22 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
       'Content-Disposition',
       `attachment; filename="${purchaseRequest.datapod?.title || 'data'}.bin"`,
     );
+    res.setHeader('X-Data-Hash', purchaseRequest.datapod?.dataHash || '');
     res.send(decryptedData);
   } catch (error) {
-    logger.error('Download failed', { error, requestId: req.requestId });
+    logger.error('Download failed', {
+      error,
+      requestId: req.requestId,
+      message: error instanceof ValidationError ? 'Data integrity verification failed' : 'Download error',
+    });
     throw error;
   }
 };
 
 /**
- * Get buyer's purchases
+ * Submit review for purchase
  */
-export const getBuyerPurchases = async (req: Request, res: Response): Promise<void> => {
+export const submitReview = async (req: Request, res: Response): Promise<void> => {
   try {
     const purchases = await prisma.purchaseRequest.findMany({
       where: {
@@ -495,109 +509,6 @@ export const getPurchaseDetails = async (req: Request, res: Response): Promise<v
     });
   } catch (error) {
     logger.error('Get purchase details failed', { error, requestId: req.requestId });
-    throw error;
-  }
-};
-
-/**
- * Submit review for purchase
- */
-export const submitReview = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { purchase_request_id } = req.params;
-    const { rating, comment } = req.body;
-
-    if (!purchase_request_id) {
-      throw new ValidationError('Missing purchase_request_id');
-    }
-
-    if (!rating || rating < 1 || rating > 5) {
-      throw new ValidationError('Rating must be between 1 and 5');
-    }
-
-    const purchase = await prisma.purchaseRequest.findUnique({
-      where: { id: purchase_request_id },
-      include: { datapod: true },
-    });
-
-    if (!purchase) {
-      throw new ValidationError('Purchase not found');
-    }
-
-    if (purchase.status !== 'completed') {
-      throw new ValidationError('Can only review completed purchases');
-    }
-
-    if (purchase.buyerAddress !== req.user!.address) {
-      throw new ValidationError('Unauthorized: buyer does not own this purchase');
-    }
-
-    logger.info('Submitting review', {
-      requestId: req.requestId,
-      purchaseRequestId: purchase_request_id,
-      rating,
-    });
-
-    const review = await prisma.review.create({
-      data: {
-        datapodId: purchase.datapod!.id,
-        purchaseRequestId: purchase.id,
-        buyerId: req.user!.address,
-        buyerAddress: purchase.buyerAddress,
-        rating,
-        comment: comment || '',
-      },
-    });
-
-    const reviews = await prisma.review.findMany({
-      where: { datapodId: purchase.datapod!.id },
-    });
-
-    const avgRating = reviews.reduce((sum: number, r: any) => sum + r.rating, 0) / reviews.length;
-
-    await prisma.dataPod.update({
-      where: { id: purchase.datapod!.id },
-      data: {
-        averageRating: new Decimal(avgRating),
-      },
-    });
-
-    await CacheService.invalidateDataPodCache(purchase.datapod!.datapodId);
-    await CacheService.invalidateMarketplaceCache();
-
-    // Emit WebSocket event
-    try {
-      const { broadcaster } = await import('@/main');
-      if (broadcaster) {
-        await broadcaster.broadcastEvent({
-          type: 'review.added',
-          data: {
-            datapod_id: purchase.datapod!.datapodId,
-            buyer_address: purchase.buyerAddress,
-            rating,
-            comment: comment || '',
-          },
-          timestamp: Math.floor(Date.now() / 1000),
-          eventId: randomUUID(),
-          blockHeight: 0,
-        });
-      }
-    } catch (wsError) {
-      logger.warn('Failed to emit WebSocket event', { error: wsError });
-    }
-
-    logger.info('Review submitted', {
-      requestId: req.requestId,
-      reviewId: review.id,
-    });
-
-    res.status(200).json({
-      status: 'success',
-      review,
-      message: 'Review submitted successfully',
-    });
-  } catch (error) {
-    logger.error('Submit review failed', { error, requestId: req.requestId });
     throw error;
   }
 };
