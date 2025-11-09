@@ -94,7 +94,10 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
         datapodId: null, // Will be set after publishing
         filePath: uploadedFile.url,
         dataHash,
-        metadata: parsedMetadata,
+        metadata: {
+          ...parsedMetadata,
+          encryptionKey: encryptionKey.toString('base64'), // Store key for fulfillment job
+        },
         status: 'pending',
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       },
@@ -103,6 +106,7 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
     logger.info('Upload staging created', {
       requestId: req.requestId,
       uploadId: uploadStaging.id,
+      dataHash,
     });
 
     res.status(200).json({
@@ -111,6 +115,7 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
       data_hash: dataHash,
       preview_data: previewData.substring(0, 500), // First 500 chars
       file_size: file.size,
+      message: 'File uploaded successfully. Ready to publish.',
     });
   } catch (error) {
     logger.error('Upload failed', { error, requestId: req.requestId });

@@ -184,7 +184,13 @@ async function validatePurchaseRequest(purchaseId: string): Promise<any> {
       async () => {
         const pr = await prisma.purchaseRequest.findUnique({
           where: { id: purchaseId },
-          include: { datapod: true },
+          include: {
+            datapod: {
+              include: {
+                uploadStaging: true, // Include upload staging to get encryption key
+              },
+            },
+          },
         });
         if (!pr) throw new Error(`Purchase request not found: ${purchaseId}`);
         return pr;
@@ -200,6 +206,17 @@ async function validatePurchaseRequest(purchaseId: string): Promise<any> {
 
     if (purchaseRequest.encryptedBlobId) {
       throw new Error('Purchase already has encrypted blob ID');
+    }
+
+    // Verify encryption key is available
+    const uploadStaging = purchaseRequest.datapod?.uploadStaging;
+    if (!uploadStaging) {
+      throw new Error('Upload staging not found for datapod');
+    }
+
+    const metadata = uploadStaging.metadata as any;
+    if (!metadata?.encryptionKey) {
+      throw new Error('Encryption key not found in upload staging metadata');
     }
 
     const duration = performance.now() - startTime;
@@ -257,6 +274,42 @@ async function downloadOriginalBlob(purchaseId: string, blobId: string): Promise
     const duration = performance.now() - startTime;
     logStep(purchaseId, {
       stepName: 'Step 2: Download from Walrus',
+      duration: Math.round(duration),
+      success: false,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Step 2.5: Decrypt seller's encrypted file
+ */
+async function decryptSellerFile(
+  purchaseId: string,
+  encryptedBlob: Buffer,
+  encryptionKeyB64: string,
+): Promise<Buffer> {
+  const startTime = performance.now();
+  try {
+    const decryptedData = EncryptionService.decryptFileSimple(
+      encryptedBlob,
+      Buffer.from(encryptionKeyB64, 'base64'),
+    );
+
+    const duration = performance.now() - startTime;
+    logStep(purchaseId, {
+      stepName: 'Step 2.5: Decrypt Seller File',
+      duration: Math.round(duration),
+      success: true,
+      data: { size: decryptedData.length },
+    });
+
+    logger.debug(`[purchase:${purchaseId}] Seller's file decrypted successfully`);
+    return decryptedData;
+  } catch (error) {
+    const duration = performance.now() - startTime;
+    logStep(purchaseId, {
+      stepName: 'Step 2.5: Decrypt Seller File',
       duration: Math.round(duration),
       success: false,
     });
@@ -574,10 +627,21 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
     const purchaseRequest = await validatePurchaseRequest(purchase_id);
 
     // Step 2: Download original file from Walrus
-    const originalBlob = await downloadOriginalBlob(purchase_id, purchaseRequest.datapod.blobId);
+    const encryptedBlob = await downloadOriginalBlob(purchase_id, purchaseRequest.datapod.blobId);
+
+    // Step 2.5: Decrypt seller's encrypted file
+    const uploadStaging = purchaseRequest.datapod?.uploadStaging;
+    const metadata = uploadStaging?.metadata as any;
+    const encryptionKey = metadata?.encryptionKey;
+
+    if (!encryptionKey) {
+      throw new Error('Encryption key not available for decryption');
+    }
+
+    const decryptedBlob = await decryptSellerFile(purchase_id, encryptedBlob, encryptionKey);
 
     // Step 3: Re-encrypt for buyer (CRITICAL)
-    const encryptedPayload = await reEncryptForBuyer(purchase_id, originalBlob, buyer_public_key);
+    const encryptedPayload = await reEncryptForBuyer(purchase_id, decryptedBlob, buyer_public_key);
 
     // Step 4: Upload encrypted blob to Walrus
     const encryptedBlobId = await uploadEncryptedBlob(purchase_id, encryptedPayload);
@@ -612,6 +676,7 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
       jobId: job.id,
       purchaseId: purchase_id,
       totalDuration: Math.round(totalDuration),
+      message: 'Purchase fulfilled: file decrypted, re-encrypted, and payment released',
     });
   } catch (error) {
     logger.error('Fulfillment job processing failed', {
@@ -619,6 +684,7 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
       purchaseId: purchase_id,
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
+      message: 'Critical: Check encryption key availability and file integrity',
     });
 
     // Mark purchase as failed
@@ -634,6 +700,7 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
       logger.error('Failed to update purchase status to failed', { error: updateError });
     }
 
+    // Re-throw error so BullMQ can handle retry
     throw error;
   }
 };
