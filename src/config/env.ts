@@ -11,6 +11,7 @@ const envSchema = z.object({
   API_BASE_URL: z.string().url().default('http://localhost:3001'),
   API_NAME: z.string().default('SourceNet Backend'),
   API_VERSION: z.string().default('1.0.0'),
+  CORS_ORIGINS: z.string().default('*'),
 
   // Database
   DATABASE_URL: z.string().url(),

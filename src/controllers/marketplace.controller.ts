@@ -322,6 +322,173 @@ export const getTopRated = async (req: Request, res: Response): Promise<void> =>
 };
 
 /**
+ * Get datapods with advanced filtering, sorting, and caching
+ * GET /api/marketplace/datapods?page=1&limit=20&category=gaming&sort_by=newest&price_min=1&price_max=100&search=steam
+ */
+export const getDataPods = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      category,
+      sort_by = 'newest',
+      price_min,
+      price_max,
+      search,
+    } = req.query as any;
+
+    // Validate and clamp pagination
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const skip = (pageNum - 1) * limitNum;
+
+    // Validate sort_by
+    const validSortOptions = ['newest', 'price_asc', 'price_desc', 'rating'];
+    const sortBy = validSortOptions.includes(sort_by) ? sort_by : 'newest';
+
+    // Parse price filters
+    const priceMin = price_min ? parseFloat(price_min) : undefined;
+    const priceMax = price_max ? parseFloat(price_max) : undefined;
+
+    // Validate price range
+    if ((priceMin && isNaN(priceMin)) || (priceMax && isNaN(priceMax))) {
+      res.status(400).json({
+        error: {
+          code: 'INVALID_PRICE_RANGE',
+          message: 'Price min and max must be valid numbers',
+          statusCode: 400,
+          requestId: req.requestId,
+        },
+      });
+      return;
+    }
+
+    // Generate cache key
+    const cacheKey = `marketplace:datapods:${pageNum}:${limitNum}:${category || 'all'}:${sortBy}:${priceMin || 'none'}:${priceMax || 'none'}:${search || 'none'}`;
+
+    logger.info('Fetching datapods', {
+      requestId: req.requestId,
+      page: pageNum,
+      limit: limitNum,
+      category,
+      sortBy,
+      priceMin,
+      priceMax,
+      search,
+    });
+
+    // Check Redis cache
+    const cached = await CacheService.getCachedData(cacheKey);
+    if (cached) {
+      logger.debug('Returning cached datapods', { requestId: req.requestId });
+      res.status(200).json(cached);
+      return;
+    }
+
+    // Build Prisma where filters
+    const where: any = {
+      status: 'published',
+      deletedAt: null,
+    };
+
+    if (category) {
+      where.category = category;
+    }
+
+    if (priceMin !== undefined || priceMax !== undefined) {
+      where.priceSui = {};
+      if (priceMin !== undefined) where.priceSui.gte = priceMin;
+      if (priceMax !== undefined) where.priceSui.lte = priceMax;
+    }
+
+    if (search) {
+      where.OR = [
+        { title: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+        { tags: { has: search.toLowerCase() } },
+      ];
+    }
+
+    // Build sort order
+    let orderBy: any = { publishedAt: 'desc' };
+    if (sortBy === 'price_asc') {
+      orderBy = { priceSui: 'asc' };
+    } else if (sortBy === 'price_desc') {
+      orderBy = { priceSui: 'desc' };
+    } else if (sortBy === 'rating') {
+      orderBy = { averageRating: 'desc' };
+    }
+
+    // Query database in parallel
+    const startTime = Date.now();
+    const [datapods, totalCount] = await Promise.all([
+      prisma.dataPod.findMany({
+        where,
+        orderBy,
+        skip,
+        take: limitNum,
+        include: {
+          seller: {
+            select: {
+              id: true,
+              username: true,
+              averageRating: true,
+              totalSales: true,
+              isVerified: true,
+            },
+          },
+        },
+      }),
+      prisma.dataPod.count({ where }),
+    ]);
+    const queryTime = Date.now() - startTime;
+
+    // Denormalize response
+    const denormalizedDatapods = datapods.map((pod: any) => ({
+      id: pod.datapodId,
+      title: pod.title,
+      category: pod.category,
+      price_sui: pod.priceSui.toNumber(),
+      seller: pod.seller.username || pod.seller.id,
+      seller_name: pod.seller.username,
+      seller_rating: pod.seller.averageRating ? parseFloat(pod.seller.averageRating.toString()) : null,
+      seller_total_sales: pod.seller.totalSales,
+      total_sales: pod.totalSales,
+      average_rating: pod.averageRating ? parseFloat(pod.averageRating.toString()) : null,
+      preview_data: pod.description?.substring(0, 100) || '',
+      size_bytes: 0, // TODO: Add size tracking to schema
+      published_at: pod.publishedAt?.toISOString(),
+    }));
+
+    const response = {
+      status: 'success',
+      datapods: denormalizedDatapods,
+      total_count: totalCount,
+      page: pageNum,
+      limit: limitNum,
+      has_next: pageNum * limitNum < totalCount,
+      has_prev: pageNum > 1,
+      query_time_ms: queryTime,
+    };
+
+    // Cache result with 1 hour TTL
+    await CacheService.setCachedData(cacheKey, response, 3600);
+
+    logger.info('Datapods fetched successfully', {
+      requestId: req.requestId,
+      count: datapods.length,
+      total: totalCount,
+      queryTime,
+    });
+
+    res.status(200).json(response);
+  } catch (error) {
+    logger.error('Get datapods failed', { error, requestId: req.requestId });
+    throw error;
+  }
+};
+
+/**
  * Get categories
  */
 export const getCategories = async (req: Request, res: Response): Promise<void> => {

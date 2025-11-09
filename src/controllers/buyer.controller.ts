@@ -7,6 +7,7 @@ import { BlockchainService } from '@/services/blockchain.service';
 import { PaymentService } from '@/services/payment.service';
 import { StorageService } from '@/services/storage.service';
 import { CacheService } from '@/services/cache.service';
+import { queueFulfillmentJob } from '@/jobs/fulfillment.job';
 import { ValidationError, BlockchainError } from '@/types/errors.types';
 import { Decimal } from '@prisma/client/runtime/library';
 
@@ -121,7 +122,20 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       escrowId: escrow.escrowId,
     });
 
-    // TODO: Queue fulfillment job
+    // Queue fulfillment job
+    try {
+      await queueFulfillmentJob({
+        purchase_id: purchaseRequest.id,
+        datapod_id: datapod.id,
+        seller_address: seller.zkloginAddress,
+        buyer_address: buyer_address,
+        buyer_public_key: buyer_public_key,
+        price_sui: datapod.priceSui.toNumber(),
+      });
+    } catch (queueError) {
+      logger.warn('Failed to queue fulfillment job', { error: queueError });
+      // Continue anyway - job can be retried
+    }
 
     res.status(200).json({
       status: 'success',
@@ -132,6 +146,111 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
     });
   } catch (error) {
     logger.error('Purchase creation failed', { error, requestId: req.requestId });
+    throw error;
+  }
+};
+
+/**
+ * Get download URL for purchased data
+ * GET /api/download/:purchase_id
+ * Rate limit: 10 requests/hour per purchase
+ */
+export const getDownloadUrl = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { purchase_id } = req.params;
+
+    if (!purchase_id) {
+      throw new ValidationError('Missing purchase_id');
+    }
+
+    // Get purchase request
+    const purchase = await prisma.purchaseRequest.findUnique({
+      where: { id: purchase_id },
+      include: { datapod: true },
+    });
+
+    if (!purchase) {
+      throw new ValidationError('Purchase not found');
+    }
+
+    // Verify buyer owns this purchase
+    if (purchase.buyerAddress !== req.user!.address) {
+      throw new ValidationError('Unauthorized: buyer does not own this purchase');
+    }
+
+    // Check purchase status
+    if (purchase.status !== 'completed') {
+      throw new ValidationError(`Purchase status is ${purchase.status}, expected completed`);
+    }
+
+    // Check rate limit: 10 requests/hour per purchase
+    const rateLimitKey = `download:rate:${purchase_id}:${req.user!.address}`;
+    const downloadCount = await CacheService.getCachedData<number>(rateLimitKey);
+
+    if (downloadCount && downloadCount >= 10) {
+      res.status(429).json({
+        error: {
+          code: 'RATE_LIMIT_EXCEEDED',
+          message: 'Download rate limit exceeded (10 per hour)',
+          statusCode: 429,
+          requestId: req.requestId,
+        },
+      });
+      return;
+    }
+
+    logger.info('Download URL requested', {
+      requestId: req.requestId,
+      purchaseId: purchase_id,
+      downloadCount: downloadCount || 0,
+    });
+
+    // Verify encrypted blob exists
+    if (!purchase.encryptedBlobId) {
+      throw new ValidationError('Encrypted blob not found for this purchase');
+    }
+
+    // Generate Walrus blob URL
+    const walrusUrl = `https://api.testnet.walrus.io/blobs/${purchase.encryptedBlobId}`;
+
+    // Increment download count (rate limiting)
+    const newCount = (downloadCount || 0) + 1;
+    await CacheService.setCachedData(rateLimitKey, newCount, 3600); // 1 hour TTL
+
+    // Log download for audit
+    await prisma.transactionAudit.create({
+      data: {
+        txType: 'download',
+        userAddress: req.user!.address,
+        userId: purchase.buyerId,
+        datapodId: purchase.datapodId,
+        data: {
+          purchaseId: purchase_id,
+          blobId: purchase.encryptedBlobId,
+          downloadCount: newCount,
+        },
+      },
+    });
+
+    const response = {
+      status: 'success',
+      blob_id: purchase.encryptedBlobId,
+      walrus_url: walrusUrl,
+      data_hash: purchase.datapod?.dataHash,
+      file_size: 0, // TODO: Add size tracking to schema
+      decryption_key: purchase.decryptionKey,
+      download_count: newCount,
+    };
+
+    logger.info('Download URL generated', {
+      requestId: req.requestId,
+      purchaseId: purchase_id,
+      blobId: purchase.encryptedBlobId,
+    });
+
+    res.status(200).json(response);
+  } catch (error) {
+    logger.error('Get download URL failed', { error, requestId: req.requestId });
     throw error;
   }
 };
@@ -233,6 +352,79 @@ export const getBuyerPurchases = async (req: Request, res: Response): Promise<vo
     });
   } catch (error) {
     logger.error('Get buyer purchases failed', { error, requestId: req.requestId });
+    throw error;
+  }
+};
+
+/**
+ * Get purchase status with caching (TTL: 5 min)
+ * GET /api/buyer/purchase/:purchase_id
+ */
+export const getPurchaseStatus = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { purchase_id } = req.params;
+
+    if (!purchase_id) {
+      throw new ValidationError('Missing purchase_id');
+    }
+
+    // Check cache first (5 min TTL)
+    const cacheKey = `purchase:status:${purchase_id}`;
+    const cached = await CacheService.getCachedData(cacheKey);
+    if (cached) {
+      logger.debug('Returning cached purchase status', { requestId: req.requestId });
+      res.status(200).json(cached);
+      return;
+    }
+
+    // Get purchase request
+    const purchase = await prisma.purchaseRequest.findUnique({
+      where: { id: purchase_id },
+      include: {
+        datapod: {
+          select: {
+            id: true,
+            datapodId: true,
+            title: true,
+            blobId: true,
+          },
+        },
+      },
+    });
+
+    if (!purchase) {
+      throw new ValidationError('Purchase not found');
+    }
+
+    // Verify buyer owns this purchase
+    if (purchase.buyerAddress !== req.user!.address) {
+      throw new ValidationError('Unauthorized: buyer does not own this purchase');
+    }
+
+    logger.info('Getting purchase status', {
+      requestId: req.requestId,
+      purchaseId: purchase_id,
+      status: purchase.status,
+    });
+
+    const response = {
+      status: 'success',
+      purchase_request_id: purchase.purchaseRequestId,
+      purchase_status: purchase.status,
+      blob_id: purchase.encryptedBlobId || purchase.datapod?.blobId,
+      datapod_id: purchase.datapod?.datapodId,
+      datapod_title: purchase.datapod?.title,
+      price_sui: purchase.priceSui.toNumber(),
+      created_at: purchase.createdAt.toISOString(),
+      completed_at: purchase.completedAt?.toISOString() || null,
+    };
+
+    // Cache for 5 minutes
+    await CacheService.setCachedData(cacheKey, response, 300);
+
+    res.status(200).json(response);
+  } catch (error) {
+    logger.error('Get purchase status failed', { error, requestId: req.requestId });
     throw error;
   }
 };

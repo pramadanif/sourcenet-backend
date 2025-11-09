@@ -250,11 +250,11 @@ export const generateToken = (payload: Omit<JWTPayload, 'iat' | 'exp'>): string 
 
   const token = jwt.sign(
     payload,
-    env.JWT_SECRET,
+    env.JWT_SECRET as string,
     {
       algorithm: 'HS256',
       expiresIn,
-    },
+    } as any,
   );
 
   return token;
@@ -265,7 +265,7 @@ export const generateToken = (payload: Omit<JWTPayload, 'iat' | 'exp'>): string 
  */
 export const verifyToken = (token: string): JWTPayload => {
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET) as JWTPayload;
+    const decoded = jwt.verify(token, env.JWT_SECRET as string) as JWTPayload;
     return decoded;
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError) {
