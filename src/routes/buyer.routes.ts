@@ -5,7 +5,6 @@ import {
   getPurchaseStatus,
   getDownloadUrl,
   downloadData,
-  getBuyerPurchases,
   getPurchaseDetails,
   submitReview,
 } from '@/controllers/buyer.controller';
@@ -20,9 +19,6 @@ router.post('/purchase', createPurchase);
 
 // GET /api/buyer/purchase/:purchase_id - Get purchase status with caching
 router.get('/purchase/:purchase_id', getPurchaseStatus);
-
-// GET /api/buyer/purchases - Get all buyer purchases
-router.get('/purchases', getBuyerPurchases);
 
 // GET /api/buyer/purchase/:purchase_id/details - Get full purchase details
 router.get('/purchase/:purchase_id/details', getPurchaseDetails);

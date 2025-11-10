@@ -34,13 +34,13 @@ const envSchema = z.object({
   WALRUS_API_URL: z.string().url(),
   WALRUS_BLOB_ENDPOINT: z.string().url(),
 
-  // AWS S3
-  AWS_REGION: z.string().default('us-east-1'),
-  AWS_ACCESS_KEY_ID: z.string(),
-  AWS_SECRET_ACCESS_KEY: z.string(),
-  S3_BUCKET_NAME: z.string(),
-  S3_ENDPOINT: z.string().url().optional(),
-  S3_USE_PATH_STYLE: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
+  // // AWS S3
+  // AWS_REGION: z.string().default('us-east-1'),
+  // AWS_ACCESS_KEY_ID: z.string(),
+  // AWS_SECRET_ACCESS_KEY: z.string(),
+  // S3_BUCKET_NAME: z.string(),
+  // S3_ENDPOINT: z.string().url().optional(),
+  // S3_USE_PATH_STYLE: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
 
   // WebSocket
   WS_PORT: z.coerce.number().default(3002),
