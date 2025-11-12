@@ -92,6 +92,65 @@ export async function handleZKLoginCallback(req: Request, res: Response): Promis
 }
 
 /**
+ * Wallet callback handler
+ * POST /api/auth/wallet/callback
+ */
+export async function handleWalletCallback(req: Request, res: Response): Promise<void> {
+  try {
+    const { address, username } = req.body;
+
+    if (!address) {
+      res.status(400).json({
+        error: {
+          code: 'MISSING_ADDRESS',
+          message: 'Address is required',
+        },
+      });
+      return;
+    }
+
+    // Find or create user
+    let user = await prisma.user.findUnique({
+      where: { walletAddress: address },
+    });
+
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          walletAddress: address,
+          username: username || `user_${address.slice(0, 8)}`,
+        },
+      });
+      logger.info('New user created via Wallet', { userId: user.id, address });
+    }
+
+    // Generate JWT token
+    const token = generateToken(user.id, address);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        token,
+        user: {
+          id: user.id,
+          address: user.walletAddress,
+          username: user.username,
+          email: user.googleEmail,
+        },
+      },
+    });
+  } catch (error) {
+    logger.error('Wallet callback error', { error });
+    res.status(500).json({
+      error: {
+        code: 'WALLET_ERROR',
+        message: 'Failed to process wallet callback',
+      },
+    });
+  }
+}
+
+/**
  * Get current user profile
  * GET /api/auth/me
  */

@@ -19,7 +19,8 @@ generator seed {
 // User model for seller/buyer profiles
 model User {
   id                String   @id @default(uuid()) @db.Uuid
-  zkloginAddress    String   @unique @map("zklogin_address")
+  zkloginAddress    String?  @unique @map("zklogin_address")
+  walletAddress     String?  @unique @map("wallet_address")
   googleEmail       String?  @unique @map("google_email")
   username          String?  @unique
   bio               String?
