@@ -163,37 +163,70 @@ export class Indexer {
   /**
    * Start metrics export
    */
-  private startMetricsExport(intervalMs: number): void {
-    setInterval(async () => {
-      try {
-        const health = await this.healthMonitor.performHealthCheck();
+  // Di startMetricsExport method, ganti setInterval dengan:
 
-        // Check for alerts
-        if (health.status !== 'healthy') {
-          if (health.checks.processingLag.status === 'error') {
-            const lag = health.checks.processingLag.details?.lagSeconds || 0;
-            const alert = this.alertManager.createLagAlert(lag, 30);
-            await this.alertManager.sendAlert(alert);
-          }
+private startMetricsExport(intervalMs: number): void {
+  const startTime = Date.now();
+  let lastEventCount = 0;
 
-          if (health.checks.database.status === 'error') {
-            const alert = this.alertManager.createDatabaseLatencyAlert(
-              health.metrics.databaseLatencyMs,
-              5000,
-            );
-            await this.alertManager.sendAlert(alert);
-          }
+  // Realtime logger - update setiap detik
+  setInterval(() => {
+    const metrics = this.metricsCollector.getMetrics();
+    const uptime = Math.floor((Date.now() - startTime) / 1000);
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('id-ID');
+    
+    // Hitung EPS (Events Per Second)
+    const eps = metrics.eventsProcessedTotal - lastEventCount;
+    lastEventCount = metrics.eventsProcessedTotal;
+    
+    // Status indicator
+    const healthIcon = metrics.indexerErrorsTotal === 0 ? '✅' : '❌';
+    
+    // Display realtime
+    process.stdout.write('\r');
+    process.stdout.write(
+      `${healthIcon} ${timeStr} | ⬆️  ${uptime}s | ` +
+      `📊 ${metrics.eventsProcessedTotal} events | ` +
+      `⚡ ${eps}/s | ` +
+      `📦 ${metrics.batchSizeAvg.toFixed(1)} avg batch | ` +
+      `❌ ${metrics.indexerErrorsTotal} errors | ` +
+      `🔄 ${metrics.indexerLagSeconds}s lag | ` +
+      `⏱️  ${metrics.databaseWriteLatencyMs.length > 0 ? (metrics.databaseWriteLatencyMs.reduce((a, b) => a + b, 0) / metrics.databaseWriteLatencyMs.length).toFixed(0) : 0}ms db`
+    );
+  }, 1000);
+
+  // Metrics export - setiap intervalMs
+  setInterval(async () => {
+    try {
+      const health = await this.healthMonitor.performHealthCheck();
+
+      // Check for alerts
+      if (health.status !== 'healthy') {
+        if (health.checks.processingLag.status === 'error') {
+          const lag = health.checks.processingLag.details?.lagSeconds || 0;
+          const alert = this.alertManager.createLagAlert(lag, 30);
+          await this.alertManager.sendAlert(alert);
         }
 
-        logger.debug('Metrics exported', {
-          status: health.status,
-          eventsProcessed: this.metricsCollector.getMetrics().eventsProcessedTotal,
-        });
-      } catch (error) {
-        logger.error('Error exporting metrics', { error });
+        if (health.checks.database.status === 'error') {
+          const alert = this.alertManager.createDatabaseLatencyAlert(
+            health.metrics.databaseLatencyMs,
+            5000,
+          );
+          await this.alertManager.sendAlert(alert);
+        }
       }
-    }, intervalMs);
-  }
+
+      logger.debug('Metrics exported', {
+        status: health.status,
+        eventsProcessed: this.metricsCollector.getMetrics().eventsProcessedTotal,
+      });
+    } catch (error) {
+      logger.error('Error exporting metrics', { error });
+    }
+  }, intervalMs);
+}
 
   /**
    * Get indexer status

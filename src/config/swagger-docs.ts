@@ -315,38 +315,39 @@ export const swaggerPaths = {
       },
     },
   },
-  '/buyer/download/{purchase_id}': {
-    post: {
-      tags: ['Buyer'],
-      summary: 'Download data',
-      security: [{ bearerAuth: [] }],
-      parameters: [
-        {
-          name: 'purchase_id',
-          in: 'path',
-          required: true,
-          schema: { type: 'string', format: 'uuid' },
-        },
-      ],
-      requestBody: {
+  '/buyer/purchase/{purchase_id}/review': {
+  post: {
+    tags: ['Buyer'],
+    summary: 'Submit review for purchase',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      {
+        name: 'purchase_id',
+        in: 'path',
         required: true,
-        content: {
-          'application/json': {
-            schema: {
-              type: 'object',
-              required: ['buyer_private_key'],
-              properties: {
-                buyer_private_key: { type: 'string' },
-              },
+        schema: { type: 'string', format: 'uuid' },
+      },
+    ],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            required: ['rating', 'comment'],
+            properties: {
+              rating: { type: 'integer', minimum: 1, maximum: 5 },
+              comment: { type: 'string' },
             },
           },
         },
       },
-      responses: {
-        '200': { description: 'Data downloaded' },
-      },
+    },
+    responses: {
+      '200': { description: 'Review submitted' },
     },
   },
+},
   '/marketplace/datapods': {
     get: {
       tags: ['Marketplace'],
