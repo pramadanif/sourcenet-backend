@@ -57,8 +57,30 @@ app.get('/health', (req: Request, res: Response): void => {
   });
 });
 
+// Database health check endpoint
+app.get('/health/db', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const prisma = (await import('@/config/database')).default;
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({
+      status: 'ok',
+      database: 'connected',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.warn('Database health check failed', { error: errorMessage });
+    res.status(503).json({
+      status: 'error',
+      database: 'disconnected',
+      error: errorMessage,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 // 404 handler
-app.use((req: Request, res: Response): void => {
+app.use((req: Request, res: Response, next: NextFunction): void => {
   res.status(404).json({
     error: {
       code: 'NOT_FOUND',

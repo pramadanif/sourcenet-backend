@@ -129,11 +129,15 @@ export class EventListener extends EventEmitter {
     );
 
     if (!events.data || events.data.length === 0) {
-      logger.debug('No new events');
+      logger.debug('No new events', { checkpoint: checkpoint.lastEventId });
       return;
     }
 
-    logger.info('Fetched events', { count: events.data.length });
+    logger.info('📡 Fetched events from blockchain', { 
+      count: events.data.length,
+      checkpoint: checkpoint.lastEventId,
+      timestamp: new Date().toISOString(),
+    });
 
     // Process each event
     for (const event of events.data) {
@@ -157,6 +161,14 @@ export class EventListener extends EventEmitter {
           continue;
         }
 
+        // Log parsed event
+        logger.info('✅ Event parsed', {
+          type: parsedEvent.type,
+          eventId: parsedEvent.eventId,
+          blockHeight: parsedEvent.blockHeight,
+          timestamp: new Date(parsedEvent.timestamp).toISOString(),
+        });
+
         // Emit parsed event
         this.emit('event', parsedEvent);
 
@@ -179,6 +191,11 @@ export class EventListener extends EventEmitter {
     }
 
     // Emit batch complete event
+    logger.info('🔄 Batch processing complete', {
+      eventsProcessed: events.data.length,
+      timestamp: new Date().toISOString(),
+      nextCheckpoint: events.data[events.data.length - 1]?.id?.eventSeq,
+    });
     this.emit('batch-complete', {
       count: events.data.length,
       timestamp: Date.now(),
@@ -196,6 +213,12 @@ export class EventListener extends EventEmitter {
 
     try {
       const blockHeight = parseInt(event.id.txDigest.slice(0, 8), 16);
+
+      logger.debug('Parsing event', {
+        rawType: event.type,
+        mappedType: eventType,
+        eventSeq: event.id.eventSeq,
+      });
 
       return {
         type: eventType,

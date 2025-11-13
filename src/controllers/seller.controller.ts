@@ -170,6 +170,9 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
     let kioskId: string;
 
     try {
+      if (!seller.zkloginAddress) {
+        throw new ValidationError('Seller zklogin address not found');
+      }
       // Build PTB for publishing DataPod
       const publishTx = BlockchainService.buildPublishPTB(
         {
@@ -243,7 +246,7 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
       data: {
         txDigest,
         txType: 'publish_datapod',
-        userAddress: seller.zkloginAddress,
+        userAddress: seller.zkloginAddress || '',
         userId: seller.id,
         datapodId: datapod.id,
         data: { datapodId, kioskId },

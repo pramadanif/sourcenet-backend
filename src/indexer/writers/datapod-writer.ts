@@ -50,6 +50,7 @@ export class DataPodWriter {
           category: datapod.category,
           priceSui: datapod.price_sui,
           dataHash: datapod.datapod_id, // Use datapod_id as hash for now
+          blobId: datapod.datapod_id, // Use datapod_id as blob reference
           status: datapod.status,
           publishedAt: datapod.published_at,
           createdAt: new Date(),

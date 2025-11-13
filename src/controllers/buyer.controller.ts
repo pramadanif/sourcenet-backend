@@ -92,6 +92,9 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
     let escrowId: string;
 
     try {
+      if (!seller.zkloginAddress) {
+        throw new ValidationError('Seller zklogin address not found');
+      }
       // Build PTB for creating purchase request and escrow
       const purchaseTx = BlockchainService.buildPurchasePTB(
         {
@@ -136,7 +139,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
         datapodId: datapod.id,
         buyerId: req.user!.address,
         buyerAddress: buyer_address,
-        sellerAddress: seller.zkloginAddress,
+        sellerAddress: seller.zkloginAddress || '',
         buyerPublicKey: buyer_public_key,
         priceSui: datapod.priceSui,
         status: 'pending',
@@ -149,7 +152,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       purchaseRequest.id,
       datapod.priceSui.toNumber(),
       buyer_address,
-      seller.zkloginAddress,
+      seller.zkloginAddress || '',
     );
 
     // Store transaction audit
@@ -174,7 +177,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       await queueFulfillmentJob({
         purchase_id: purchaseRequest.id,
         datapod_id: datapod.id,
-        seller_address: seller.zkloginAddress,
+        seller_address: seller.zkloginAddress || '',
         buyer_address: buyer_address,
         buyer_public_key: buyer_public_key,
         price_sui: datapod.priceSui.toNumber(),

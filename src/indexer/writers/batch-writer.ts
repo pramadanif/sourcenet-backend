@@ -43,9 +43,15 @@ export class BatchWriter extends EventEmitter {
    */
   async addEvent(event: ParsedEvent): Promise<void> {
     this.eventQueue.push(event);
+    logger.debug('Event added to batch queue', {
+      eventType: event.type,
+      queueSize: this.eventQueue.length,
+      batchSize: this.batchSize,
+    });
 
     // Check if batch is full
     if (this.eventQueue.length >= this.batchSize) {
+      logger.info('📦 Batch full, flushing to database', { queueSize: this.eventQueue.length });
       await this.flush();
     } else if (!this.batchTimer) {
       // Start batch timeout
@@ -78,12 +84,14 @@ export class BatchWriter extends EventEmitter {
 
     try {
       const startTime = Date.now();
+      logger.info('💾 Writing batch to database', { count: batch.length });
       await this.writeBatch(batch);
       const duration = Date.now() - startTime;
 
-      logger.info('Batch written successfully', {
+      logger.info('✅ Batch written successfully', {
         count: batch.length,
         durationMs: duration,
+        eventsPerSecond: Math.round((batch.length / duration) * 1000),
       });
 
       this.emit('batch-written', {
@@ -92,7 +100,11 @@ export class BatchWriter extends EventEmitter {
         timestamp: new Date(),
       });
     } catch (error) {
-      logger.error('Failed to write batch', { error, count: batch.length });
+      logger.error('❌ Failed to write batch', { 
+        error: error instanceof Error ? error.message : error,
+        count: batch.length,
+        requeueing: true,
+      });
       // Re-queue events for retry
       this.eventQueue.unshift(...batch);
       this.emit('batch-error', { error, count: batch.length });
@@ -117,6 +129,10 @@ export class BatchWriter extends EventEmitter {
    */
   private async processEvent(tx: any, event: ParsedEvent): Promise<void> {
     try {
+      logger.debug('Processing event in transaction', {
+        type: event.type,
+        eventId: event.eventId,
+      });
       switch (event.type) {
         case 'datapod.published': {
           const parsed = parseDataPodPublished(event.data);
@@ -247,10 +263,18 @@ export class BatchWriter extends EventEmitter {
         }
 
         default:
-          logger.warn('Unknown event type', { type: event.type });
+          logger.warn('⚠️ Unknown event type', { type: event.type });
       }
+      logger.debug('Event processed successfully', {
+        type: event.type,
+        eventId: event.eventId,
+      });
     } catch (error) {
-      logger.error('Error processing event', { error, eventType: event.type, eventId: event.eventId });
+      logger.error('❌ Error processing event', { 
+        error: error instanceof Error ? error.message : error,
+        eventType: event.type,
+        eventId: event.eventId,
+      });
       throw error; // Re-throw to rollback transaction
     }
   }

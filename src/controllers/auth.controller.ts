@@ -1,10 +1,8 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
-
-const prisma = new PrismaClient();
+import prisma from '@/config/database';
 
 /**
  * Generate JWT token
@@ -31,7 +29,10 @@ export async function handleZKLoginCallback(req: Request, res: Response): Promis
   try {
     const { address, email, username } = req.body;
 
+    logger.info('ZKLogin callback received', { address, email, username });
+
     if (!address) {
+      logger.warn('ZKLogin callback missing address', { body: req.body });
       res.status(400).json({
         error: {
           code: 'MISSING_ADDRESS',
@@ -62,11 +63,14 @@ export async function handleZKLoginCallback(req: Request, res: Response): Promis
           where: { id: user.id },
           data: { googleEmail: email },
         });
+        logger.info('User email updated via ZKLogin', { userId: user.id, address });
       }
     }
 
     // Generate JWT token
     const token = generateToken(user.id, address);
+
+    logger.info('ZKLogin callback successful', { userId: user.id, address });
 
     res.status(200).json({
       status: 'success',
@@ -81,11 +85,26 @@ export async function handleZKLoginCallback(req: Request, res: Response): Promis
       },
     });
   } catch (error) {
-    logger.error('ZKLogin callback error', { error });
-    res.status(500).json({
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : '';
+    const isDatabaseError = errorMessage.includes('Can\'t reach database') || errorMessage.includes('PrismaClientInitializationError');
+    
+    logger.error('ZKLogin callback error', {
+      error: errorMessage,
+      stack: errorStack,
+      isDatabaseError,
+      requestBody: req.body,
+    });
+    
+    const statusCode = isDatabaseError ? 503 : 500;
+    const code = isDatabaseError ? 'DATABASE_UNAVAILABLE' : 'ZKLOGIN_ERROR';
+    const message = isDatabaseError ? 'Database service temporarily unavailable' : 'Failed to process ZKLogin callback';
+    
+    res.status(statusCode).json({
       error: {
-        code: 'ZKLOGIN_ERROR',
-        message: 'Failed to process ZKLogin callback',
+        code,
+        message,
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
       },
     });
   }
