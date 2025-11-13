@@ -11,6 +11,8 @@ import { BlockchainService } from '@/services/blockchain.service';
 import { CacheService } from '@/services/cache.service';
 import { WebSocketServerManager } from '@/websocket/websocket.server';
 import { WebSocketBroadcaster } from '@/websocket/websocket.broadcaster';
+import swaggerUi from 'swagger-ui-express';
+import { swaggerSpec } from '@/config/swagger';
 
 const app = express();
 const PORT = env.PORT || 3000;
@@ -45,6 +47,13 @@ declare global {
   }
 }
 
+// Tambahkan sebelum app.use('/api', routes):
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  swaggerOptions: {
+    persistAuthorization: true,
+    docExpansion: 'list',
+  },
+}));
 // Routes
 app.use('/api', routes);
 
