@@ -68,7 +68,7 @@ module sourcenet::datapod {
     const EInvalidTitle: u64 = 4;
 
     /// Create new DataPod
-    public fun create_datapod(
+    public entry fun create_datapod(
         datapod_id: String,
         title: String,
         category: String,
@@ -119,7 +119,7 @@ module sourcenet::datapod {
     }
 
     /// Publish DataPod to marketplace
-    public fun publish_datapod(
+    public entry fun publish_datapod(
         datapod: &mut DataPod,
         kiosk_id: String,
         cap: &DataPodOwnerCap,
@@ -143,7 +143,7 @@ module sourcenet::datapod {
     }
 
     /// Delist DataPod from marketplace
-    public fun delist_datapod(
+    public entry fun delist_datapod(
         datapod: &mut DataPod,
         cap: &DataPodOwnerCap,
         ctx: &mut TxContext,
@@ -160,7 +160,7 @@ module sourcenet::datapod {
     }
 
     /// Update DataPod price
-    public fun update_price(
+    public entry fun update_price(
         datapod: &mut DataPod,
         new_price: u64,
         cap: &DataPodOwnerCap,
@@ -179,12 +179,12 @@ module sourcenet::datapod {
     }
 
     /// Increment total sales
-    public fun increment_sales(datapod: &mut DataPod) {
+    public entry fun increment_sales(datapod: &mut DataPod) {
         datapod.total_sales = datapod.total_sales + 1;
     }
 
     /// Update average rating
-    public fun update_rating(datapod: &mut DataPod, new_rating: u64) {
+    public entry fun update_rating(datapod: &mut DataPod, new_rating: u64) {
         datapod.average_rating = new_rating;
     }
 

@@ -230,26 +230,32 @@ export class BlockchainService {
       // Split coins for payment (assumes buyer has SUI)
       const coinInputs = tx.splitCoins(tx.gas, [tx.pure.u64(purchaseData.price)]);
 
-      // Create PurchaseRequest
+      // Create PurchaseRequest with all required parameters
+      // Matches contract signature: create_purchase(purchase_id, datapod_id, buyer, seller, buyer_public_key, price_sui, data_hash, ctx)
+      const purchaseId = `0x${Buffer.from(Date.now().toString()).toString('hex').padStart(64, '0')}`;
       const purchaseRequest = tx.moveCall({
-        target: `${SUI_PACKAGE_ID}::purchase::create_purchase_request`,
+        target: `${SUI_PACKAGE_ID}::purchase::create_purchase`,
         arguments: [
-          tx.pure.address(purchaseData.datapodId),
+          tx.pure.string(purchaseId),
+          tx.pure.string(purchaseData.datapodId),
           tx.pure.address(purchaseData.buyer),
           tx.pure.address(purchaseData.seller),
-          tx.pure.string(purchaseData.dataHash),
           tx.pure.string(purchaseData.buyerPublicKey),
+          tx.pure.u64(purchaseData.price),
+          tx.pure.string(purchaseData.dataHash),
         ],
       });
 
-      // Create Escrow and deposit payment
+      // Create Escrow with all required parameters
+      // Matches contract signature: create_escrow(purchase_id, buyer, seller, data_hash, coin, ctx)
       tx.moveCall({
         target: `${SUI_PACKAGE_ID}::escrow::create_escrow`,
         arguments: [
-          purchaseRequest,
-          coinInputs,
-          tx.pure.u64(purchaseData.price),
+          tx.pure.string(purchaseId),
+          tx.pure.address(purchaseData.buyer),
           tx.pure.address(purchaseData.seller),
+          tx.pure.string(purchaseData.dataHash),
+          coinInputs,
         ],
       });
 
@@ -257,6 +263,7 @@ export class BlockchainService {
         buyer: purchaseData.buyer,
         datapodId: purchaseData.datapodId,
         price: purchaseData.price,
+        purchaseId,
       });
 
       return tx;
@@ -269,37 +276,41 @@ export class BlockchainService {
   /**
    * Build PTB for releasing payment to seller after fulfillment
    * Updates purchase status and transfers escrow to seller
+   * Note: This requires the PurchaseOwnerCap to be passed as an object
    */
   static buildReleasePaymentPTB(
     purchaseId: string,
+    escrowId: string,
+    purchaseOwnerCapId: string,
     seller: string,
     sponsor: string
   ): Transaction {
     try {
       const tx = new Transaction();
 
-      // Release escrow - move call to get the coin from escrow
-      const releasedCoin = tx.moveCall({
+      // Release escrow to seller
+      // Matches contract signature: release_escrow(escrow: &mut Escrow, seller_address: address, ctx: &mut TxContext)
+      tx.moveCall({
         target: `${SUI_PACKAGE_ID}::escrow::release_escrow`,
         arguments: [
-          tx.object(purchaseId),
-          tx.object(CLOCK_ID),
+          tx.object(escrowId),
+          tx.pure.address(seller),
         ],
       });
 
-      // Transfer coin to seller
-      tx.transferObjects([releasedCoin], tx.pure.address(seller));
-
       // Update purchase status to completed
+      // Matches contract signature: complete_purchase(purchase: &mut PurchaseRequest, cap: &PurchaseOwnerCap, ctx: &mut TxContext)
       tx.moveCall({
         target: `${SUI_PACKAGE_ID}::purchase::complete_purchase`,
         arguments: [
           tx.object(purchaseId),
+          tx.object(purchaseOwnerCapId),
         ],
       });
 
       logger.info('Release payment PTB built', {
         purchaseId,
+        escrowId,
         seller,
       });
 

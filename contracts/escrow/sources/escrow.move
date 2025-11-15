@@ -57,7 +57,7 @@ module sourcenet::escrow {
     const EInvalidAmount: u64 = 4;
 
     /// Create new escrow
-    public fun create_escrow(
+    public entry fun create_escrow(
         purchase_id: String,
         buyer: address,
         seller: address,
@@ -102,7 +102,7 @@ module sourcenet::escrow {
     }
 
     /// Release escrow to seller
-    public fun release_escrow(
+    public entry fun release_escrow(
         escrow: &mut Escrow,
         seller_address: address,
         ctx: &mut TxContext,
@@ -123,7 +123,7 @@ module sourcenet::escrow {
     }
 
     /// Refund escrow to buyer
-    public fun refund_escrow(
+    public entry fun refund_escrow(
         escrow: &mut Escrow,
         buyer_address: address,
         ctx: &mut TxContext,
