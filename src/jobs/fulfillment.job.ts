@@ -414,20 +414,11 @@ async function updateBlockchain(
   buyerAddress: string,
   blobId: string,
   priceSui: number,
-  escrowId: string,
-  purchaseOwnerCapId: string,
-  sellerAddress: string,
 ): Promise<string> {
   const startTime = performance.now();
   try {
     // Build PTB transaction for blockchain update
-    const tx = BlockchainService.buildReleasePaymentPTB(
-      purchaseId,
-      escrowId,
-      purchaseOwnerCapId,
-      sellerAddress,
-      env.SUI_SPONSOR_ADDRESS
-    );
+    const tx = BlockchainService.buildReleasePaymentPTB(purchaseId, buyerAddress, env.SUI_SPONSOR_ADDRESS);
 
     const txDigest = await retryWithCustomDelays(
       async () => {
@@ -721,28 +712,12 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
     const encryptedBlobId = await uploadEncryptedBlob(purchase_id, encryptedPayload);
 
     // Step 5: Update blockchain with blob_id
-    // Fetch escrow and purchase owner cap IDs from database
-    const escrowTransaction = await prisma.escrowTransaction.findFirst({
-      where: { purchaseRequestId: purchaseRequest.id },
-    });
-
-    if (!escrowTransaction) {
-      throw new Error('Escrow transaction not found for purchase');
-    }
-
-    // TODO: Retrieve purchaseOwnerCapId from blockchain or database
-    // For now, generate deterministic ID based on purchase_id
-    const purchaseOwnerCapId = `0x${Buffer.from(`cap_${purchase_id}`).toString('hex').padStart(64, '0')}`;
-
     const txDigest = await updateBlockchain(
       purchase_id,
       datapod_id,
       buyer_address,
       encryptedBlobId,
       price_sui,
-      escrowTransaction.id,
-      purchaseOwnerCapId,
-      seller_address,
     );
 
     // Step 6: Update database

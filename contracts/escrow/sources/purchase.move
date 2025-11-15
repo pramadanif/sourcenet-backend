@@ -61,7 +61,7 @@ module sourcenet::purchase {
     const EInvalidPrice: u64 = 3;
 
     /// Create new purchase request
-    public entry fun create_purchase(
+    public fun create_purchase(
         purchase_id: String,
         datapod_id: String,
         buyer: address,
@@ -107,7 +107,7 @@ module sourcenet::purchase {
     }
 
     /// Mark purchase as completed
-    public entry fun complete_purchase(
+    public fun complete_purchase(
         purchase: &mut PurchaseRequest,
         cap: &PurchaseOwnerCap,
         ctx: &mut TxContext,
@@ -127,7 +127,7 @@ module sourcenet::purchase {
     }
 
     /// Refund purchase
-    public entry fun refund_purchase(
+    public fun refund_purchase(
         purchase: &mut PurchaseRequest,
         cap: &PurchaseOwnerCap,
     ) {
@@ -144,7 +144,7 @@ module sourcenet::purchase {
     }
 
     /// Dispute purchase
-    public entry fun dispute_purchase(
+    public fun dispute_purchase(
         purchase: &mut PurchaseRequest,
         ctx: &mut TxContext,
     ) {
