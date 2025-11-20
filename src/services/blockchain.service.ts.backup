@@ -1,9 +1,6 @@
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
-import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { Secp256k1Keypair } from '@mysten/sui/keypairs/secp256k1';
-import { Secp256r1Keypair } from '@mysten/sui/keypairs/secp256r1';
 import { sign as naclSign } from 'tweetnacl';
 import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
@@ -328,7 +325,7 @@ export class BlockchainService {
         const sponsorPrivateKey = env.SUI_SPONSOR_PRIVATE_KEY;
 
         // Create keypair from private key (expects base64 format)
-        const keypair = Secp256k1Keypair.fromSecretKey(
+        const keypair = Ed25519Keypair.fromSecretKey(
           Buffer.from(sponsorPrivateKey, 'base64')
         );
 

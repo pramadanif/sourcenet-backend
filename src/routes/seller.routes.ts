@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as sellerController from '@/controllers/seller.controller';
 import { authMiddleware } from '@/middleware/auth.middleware';
+import { upload } from '@/middleware/upload.middleware';
 
 const router = Router();
 
@@ -8,7 +9,7 @@ const router = Router();
 router.use(authMiddleware);
 
 // Upload data
-router.post('/upload', sellerController.uploadData);
+router.post('/upload', upload.single('file'), sellerController.uploadData);
 
 // Publish DataPod
 router.post('/publish', sellerController.publishDataPod);

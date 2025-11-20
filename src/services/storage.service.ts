@@ -59,6 +59,9 @@ export class StorageService {
   /**
    * Upload file to Walrus Storage
    */
+  /**
+   * Upload file to Walrus Storage
+   */
   static async uploadToWalrus(
     file: {
       buffer: Buffer;
@@ -67,7 +70,6 @@ export class StorageService {
     folder: string = 'uploads',
   ): Promise<UploadedFile> {
     try {
-      const client = this.getClient();
       const uniquePath = `${folder}/${randomUUID()}-${file.originalname}`;
 
       logger.info('Uploading file to Walrus', {
@@ -76,38 +78,75 @@ export class StorageService {
         path: uniquePath,
       });
 
-      // Create FormData for multipart upload
-      const formData = new FormData();
-      const blob = new Blob([new Uint8Array(file.buffer)], { type: 'application/octet-stream' });
-      formData.append('file', blob, file.originalname);
-      formData.append('path', uniquePath);
+      // Try primary URL from env, then fallback to known working testnet publisher
+      const urls = [
+        env.WALRUS_API_URL,
+        'https://publisher.walrus-testnet.walrus.space'
+      ];
 
-      // Configure Walrus parameters
-      formData.append('replication', '10'); // 10x replication
-      formData.append('encoding', 'reed-solomon'); // Reed-Solomon encoding
-      formData.append('retention', '31536000'); // 1 year in seconds
+      let response: any;
+      let lastError: any;
+      let successUrl = '';
 
-      const response = await client.post('/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+      for (const baseUrl of urls) {
+        try {
+          // Remove trailing slash if present
+          const cleanUrl = baseUrl.replace(/\/$/, '');
+          const endpoint = `${cleanUrl}/v1/blobs?epochs=5`; // Default to 5 epochs
 
-      if (!response.data.cid) {
-        throw new Error('No CID in response');
+          logger.info(`Attempting upload to ${endpoint}`);
+
+          response = await axios.put(endpoint, file.buffer, {
+            headers: {
+              'Content-Type': 'application/octet-stream',
+            },
+            timeout: 60000, // Increased timeout for large files
+          });
+
+          successUrl = cleanUrl;
+          break; // Success
+        } catch (error) {
+          lastError = error;
+          logger.warn(`Failed to upload to ${baseUrl}`, { error: (error as Error).message });
+          continue;
+        }
+      }
+
+      if (!response) {
+        throw lastError || new Error('All Walrus endpoints failed');
+      }
+
+      // Handle Walrus response format
+      // It can be { newlyCreated: { blobObject: { blobId: "..." } } } 
+      // or { alreadyCertified: { blobId: "..." } }
+      let blobId: string | undefined;
+
+      if (response.data.newlyCreated) {
+        blobId = response.data.newlyCreated.blobObject.blobId;
+      } else if (response.data.alreadyCertified) {
+        blobId = response.data.alreadyCertified.blobId;
+      } else if (response.data.blobId) {
+        // Direct blobId (some versions)
+        blobId = response.data.blobId;
+      }
+
+      if (!blobId) {
+        logger.error('Invalid Walrus response', { data: response.data });
+        throw new Error('No blobId in Walrus response');
       }
 
       const uploadedFile: UploadedFile = {
-        cid: response.data.cid,
-        url: this.generatePublicUrl(response.data.cid),
+        cid: blobId,
+        url: `${GATEWAY_URL}/${blobId}`, // Use gateway for reading
         originalName: file.originalname,
         size: file.buffer.length,
         uploadedAt: new Date().toISOString(),
       };
 
       logger.info('File uploaded to Walrus successfully', {
-        cid: response.data.cid,
+        blobId,
         size: file.buffer.length,
+        publisher: successUrl
       });
 
       return uploadedFile;
