@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { protectedRoute } from '@/middleware/auth.middleware';
+import { authMiddleware } from '@/middleware/auth.middleware';
 import {
   createPurchase,
   getPurchaseStatus,
@@ -7,15 +7,18 @@ import {
   downloadData,
   getPurchaseDetails,
   submitReview,
+  getBuyerPurchases
 } from '@/controllers/buyer.controller';
 
 const router = Router();
 
 // All buyer routes require authentication
-router.use(protectedRoute);
+router.use(authMiddleware);
 
 // POST /api/buyer/purchase - Create purchase
 router.post('/purchase', createPurchase);
+
+router.get('/purchases', getBuyerPurchases);
 
 // GET /api/buyer/purchase/:purchase_id - Get purchase status with caching
 router.get('/purchase/:purchase_id', getPurchaseStatus);
