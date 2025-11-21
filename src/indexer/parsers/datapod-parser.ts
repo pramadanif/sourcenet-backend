@@ -42,7 +42,7 @@ export function parseDataPodPublished(eventData: any): ParsedDataPodEvent | null
       title: validated.title,
       category: validated.category,
       price_sui: validated.price.toString(),
-      data_hash: validated.data_hash,
+      data_hash: validated.data_hash || '',
       kiosk_id: validated.kiosk_id || null,
     };
   } catch (error) {

@@ -129,11 +129,13 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
       data: {
         sellerId: seller.id,
         datapodId: null, // Will be set after publishing
-        filePath: uploadedFile.url,
+        filePath: uploadedFile.cid, // Store blob ID, not URL
         dataHash,
         metadata: {
           ...parsedMetadata,
           encryptionKey: encryptionKey.toString('base64'), // Store key for fulfillment job
+          blobId: uploadedFile.cid, // Also store in metadata for clarity
+          walrusUrl: uploadedFile.url, // Keep URL for reference
         },
         status: 'pending',
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
@@ -235,7 +237,7 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
           description: metadata.description || '',
           price: priceInMist, // Convert to MIST (BigInt)
           dataHash: uploadStaging.dataHash,
-          blobId: uploadStaging.filePath,
+          blobId: uploadStaging.filePath, // Now contains blob ID directly
           uploadId: upload_id,
           sellerAddress: sellerAddress,
         },
@@ -244,7 +246,7 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
       );
 
       // Execute transaction with sponsored gas
-      txDigest = await BlockchainService.executeTransaction(publishTx, true);
+      txDigest = await BlockchainService.executeTransaction(publishTx);
 
       // Wait for transaction confirmation
       const txResult = await BlockchainService.waitForTransaction(txDigest);

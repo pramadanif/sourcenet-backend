@@ -30,15 +30,19 @@ export class WalrusService {
     }
 
     try {
+      // Use known working Walrus testnet publisher endpoint
+      // The env variable may point to api.testnet.walrus.io which doesn't resolve
+      const baseURL = 'https://publisher.walrus-testnet.walrus.space';
+
       this.client = axios.create({
-        baseURL: env.WALRUS_API_URL,
+        baseURL,
         timeout: REQUEST_TIMEOUT,
         headers: {
           'Content-Type': 'application/octet-stream',
         },
       });
 
-      logger.info('Walrus client initialized', { apiUrl: env.WALRUS_API_URL });
+      logger.info('Walrus client initialized', { apiUrl: baseURL });
       return this.client;
     } catch (error) {
       logger.error('Failed to initialize Walrus client', { error });
@@ -58,47 +62,59 @@ export class WalrusService {
 
   /**
    * Upload encrypted blob to Walrus
-   * Configured for high replication and long retention
+   * Uses PUT /v1/blobs?epochs={EPOCHS} with binary data
    */
   static async uploadBlob(
     encryptedData: Buffer,
     metadata?: {
       name?: string;
       size?: number;
+      epochs?: number;
     },
   ): Promise<WalrusBlob> {
     try {
       const uploadWithRetry = async (): Promise<WalrusBlob> => {
         const client = this.getClient();
+        const epochs = metadata?.epochs || 5; // Default 5 epochs
 
-        const formData = new FormData();
-        const blob = new Blob([new Uint8Array(encryptedData)], { type: 'application/octet-stream' });
-        formData.append('file', blob, metadata?.name || 'data.bin');
+        // Use PUT /v1/blobs?epochs={EPOCHS} with binary data
+        const response = await client.put(
+          `/v1/blobs?epochs=${epochs}`,
+          encryptedData,
+          {
+            headers: {
+              'Content-Type': 'application/octet-stream',
+            },
+          }
+        );
 
-        // Configure Walrus parameters
-        formData.append('replication', '10'); // 10x replication
-        formData.append('encoding', 'reed-solomon'); // Reed-Solomon encoding
-        formData.append('retention', '31536000'); // 1 year in seconds
+        // Handle Walrus response format
+        // Response can be:
+        // - { newlyCreated: { blobObject: { blobId: "..." } } }
+        // - { alreadyCertified: { blobId: "..." } }
+        let blobId: string | undefined;
 
-        const response = await client.post('/upload', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        });
+        if (response.data.newlyCreated?.blobObject?.blobId) {
+          blobId = response.data.newlyCreated.blobObject.blobId;
+        } else if (response.data.alreadyCertified?.blobId) {
+          blobId = response.data.alreadyCertified.blobId;
+        }
 
-        if (!response.data.blobId) {
+        if (!blobId) {
+          logger.error('Invalid Walrus response', { data: response.data });
           throw new Error('No blob ID in response');
         }
 
-        const blobUrl = `${env.WALRUS_BLOB_ENDPOINT}/${response.data.blobId}`;
+        const blobUrl = `${env.WALRUS_BLOB_ENDPOINT}/v1/blobs/${blobId}`;
 
         logger.info('Blob uploaded to Walrus', {
-          blobId: response.data.blobId,
+          blobId,
           size: metadata?.size || encryptedData.length,
+          epochs,
         });
 
         return {
-          blobId: response.data.blobId,
+          blobId: blobId,
           url: blobUrl,
           size: metadata?.size || encryptedData.length,
           createdAt: new Date().toISOString(),
@@ -121,33 +137,38 @@ export class WalrusService {
 
   /**
    * Download encrypted blob from Walrus
+   * Uses GET /v1/blobs/{blobId}
    */
   static async downloadBlob(blobId: string): Promise<Buffer> {
     try {
       const downloadWithRetry = async (): Promise<Buffer> => {
         const client = this.getClient();
 
-        // Check if blob exists first
-        try {
-          await client.head(`/blobs/${blobId}`);
-        } catch (error) {
-          if (axios.isAxiosError(error) && error.response?.status === 404) {
-            throw new WalrusError(`Blob not found: ${blobId}`);
-          }
-          throw error;
-        }
+        logger.debug('Downloading blob from Walrus', { blobId, endpoint: `/v1/blobs/${blobId}` });
 
-        const response = await client.get(`/blobs/${blobId}`, {
+        // Use GET /v1/blobs/{blobId}
+        const response = await client.get(`/v1/blobs/${blobId}`, {
           responseType: 'arraybuffer',
+          timeout: REQUEST_TIMEOUT,
         });
 
-        logger.info('Blob downloaded from Walrus', { blobId });
+        logger.info('Blob downloaded from Walrus', { blobId, size: response.data.byteLength });
         return Buffer.from(response.data);
       };
 
       return await retry(downloadWithRetry, MAX_RETRIES, RETRY_DELAY);
     } catch (error) {
-      logger.error('Failed to download blob from Walrus', { error, blobId });
+      if (axios.isAxiosError(error)) {
+        logger.error('Failed to download blob from Walrus - Axios error', {
+          blobId,
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          message: error.message,
+        });
+      } else {
+        logger.error('Failed to download blob from Walrus', { error, blobId });
+      }
       throw new WalrusError('Failed to download blob from Walrus storage');
     }
   }

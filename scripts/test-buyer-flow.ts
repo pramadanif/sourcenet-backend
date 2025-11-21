@@ -92,7 +92,17 @@ async function runTest() {
         console.log('✅ Purchases List:', JSON.stringify(purchasesResponse.data, null, 2));
 
     } catch (error: any) {
-        console.error('\n❌ Test Failed:', error.response?.data || error.message);
+        console.error('\n❌ Test Failed:');
+        if (error.response) {
+            console.error('Status:', error.response.status);
+            console.error('Data:', JSON.stringify(error.response.data, null, 2));
+        } else if (error.request) {
+            console.error('No response received from server');
+            console.error('Is the backend server running on http://localhost:3001?');
+        } else {
+            console.error('Error:', error.message);
+        }
+        process.exit(1);
     }
 }
 

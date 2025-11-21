@@ -24,22 +24,24 @@ export class PaymentService {
     purchaseRequestId: string,
     amount: number,
     buyer: string,
-    seller: string,
+    sellerId: string,
+    sellerAddress: string,
   ): Promise<EscrowDetails> {
     try {
       logger.info('Creating escrow', {
         purchaseRequestId,
         amount,
         buyer,
-        seller,
+        sellerId,
+        sellerAddress,
       });
 
       // Create escrow transaction in database
       const escrow = await prisma.escrowTransaction.create({
         data: {
           purchaseRequestId,
-          sellerId: seller, // This should be the seller's user ID from database
-          sellerAddress: seller,
+          sellerId: sellerId,
+          sellerAddress: sellerAddress,
           buyerAddress: buyer,
           amountSui: new Decimal(amount),
           status: 'holding',

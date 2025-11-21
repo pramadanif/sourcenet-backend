@@ -134,12 +134,26 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       throw new BlockchainError('Failed to execute purchase transaction');
     }
 
+    // Get buyer details
+    const buyer = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
+    });
+
+    if (!buyer) {
+      throw new ValidationError('Buyer not found');
+    }
+
     // Record in database
     const purchaseRequest = await prisma.purchaseRequest.create({
       data: {
         purchaseRequestId,
         datapodId: datapod.id,
-        buyerId: req.user!.address,
+        buyerId: buyer.id,
         buyerAddress: buyer_address,
         sellerAddress: sellerAddress || '',
         buyerPublicKey: buyer_public_key,
@@ -154,6 +168,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       purchaseRequest.id,
       datapod.priceSui.toNumber(),
       buyer_address,
+      seller.id,
       sellerAddress || '',
     );
 
@@ -235,7 +250,7 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
     }
 
     const purchase = await prisma.purchaseRequest.findUnique({
-      where: { id: purchase_id },
+      where: { purchaseRequestId: purchase_id },
       include: { datapod: true },
     });
 
@@ -316,11 +331,11 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
  */
 export const downloadData = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { purchase_request_id } = req.params;
+    const { purchase_id } = req.params;
     const { buyer_private_key } = req.body;
 
-    if (!purchase_request_id) {
-      throw new ValidationError('Missing purchase_request_id');
+    if (!purchase_id) {
+      throw new ValidationError('Missing purchase_id');
     }
 
     if (!buyer_private_key) {
@@ -328,7 +343,7 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
     }
 
     const purchaseRequest = await prisma.purchaseRequest.findUnique({
-      where: { id: purchase_request_id },
+      where: { purchaseRequestId: purchase_id },
       include: { datapod: true },
     });
 
@@ -346,7 +361,7 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
 
     logger.info('Downloading data', {
       requestId: req.requestId,
-      purchaseRequestId: purchase_request_id,
+      purchaseRequestId: purchase_id,
     });
 
     if (!purchaseRequest.encryptedBlobId) {
@@ -373,7 +388,7 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
 
     logger.info('Data decrypted and verified successfully', {
       requestId: req.requestId,
-      purchaseRequestId: purchase_request_id,
+      purchaseRequestId: purchase_id,
       dataHash: decryptedHash,
     });
 
@@ -539,7 +554,7 @@ export const submitReview = async (req: Request, res: Response): Promise<void> =
 
     // Get purchase request
     const purchase = await prisma.purchaseRequest.findUnique({
-      where: { id: purchase_id },
+      where: { purchaseRequestId: purchase_id },
       include: {
         datapod: true,
       },
@@ -653,7 +668,7 @@ export const getPurchaseStatus = async (req: Request, res: Response): Promise<vo
     }
 
     const purchase = await prisma.purchaseRequest.findUnique({
-      where: { id: purchase_id },
+      where: { purchaseRequestId: purchase_id },
       include: {
         datapod: {
           select: {
@@ -700,10 +715,10 @@ export const getPurchaseStatus = async (req: Request, res: Response): Promise<vo
  */
 export const getPurchaseDetails = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { purchase_request_id } = req.params;
+    const { purchase_id } = req.params;
 
     const purchase = await prisma.purchaseRequest.findUnique({
-      where: { id: purchase_request_id },
+      where: { purchaseRequestId: purchase_id },
       include: {
         datapod: {
           include: {

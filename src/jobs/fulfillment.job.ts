@@ -246,6 +246,8 @@ async function validatePurchaseRequest(purchaseId: string): Promise<any> {
 async function downloadOriginalBlob(purchaseId: string, blobId: string): Promise<Buffer> {
   const startTime = performance.now();
   try {
+    logger.debug(`[purchase:${purchaseId}] Downloading blob: ${blobId}`);
+
     const blob = await retryWithCustomDelays(
       async () => {
         try {
