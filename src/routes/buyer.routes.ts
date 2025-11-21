@@ -9,6 +9,7 @@ import {
   submitReview,
   getBuyerPurchases
 } from '@/controllers/buyer.controller';
+import { asyncHandler } from '@/utils/async-handler';
 
 const router = Router();
 
@@ -16,23 +17,23 @@ const router = Router();
 router.use(authMiddleware);
 
 // POST /api/buyer/purchase - Create purchase
-router.post('/purchase', createPurchase);
+router.post('/purchase', asyncHandler(createPurchase));
 
-router.get('/purchases', getBuyerPurchases);
+router.get('/purchases', asyncHandler(getBuyerPurchases));
 
 // GET /api/buyer/purchase/:purchase_id - Get purchase status with caching
-router.get('/purchase/:purchase_id', getPurchaseStatus);
+router.get('/purchase/:purchase_id', asyncHandler(getPurchaseStatus));
 
 // GET /api/buyer/purchase/:purchase_id/details - Get full purchase details
-router.get('/purchase/:purchase_id/details', getPurchaseDetails);
+router.get('/purchase/:purchase_id/details', asyncHandler(getPurchaseDetails));
 
 // GET /api/download/:purchase_id - Get download URL with rate limiting
-router.get('/download/:purchase_id', getDownloadUrl);
+router.get('/download/:purchase_id', asyncHandler(getDownloadUrl));
 
 // POST /api/download/:purchase_id - Download data (legacy endpoint)
-router.post('/download/:purchase_id', downloadData);
+router.post('/download/:purchase_id', asyncHandler(downloadData));
 
 // POST /api/buyer/purchase/:purchase_id/review - Submit review
-router.post('/purchase/:purchase_id/review', submitReview);
+router.post('/purchase/:purchase_id/review', asyncHandler(submitReview));
 
 export default router;

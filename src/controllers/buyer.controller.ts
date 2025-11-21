@@ -90,22 +90,23 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
     let txDigest: string;
     let purchaseRequestId: string;
     let escrowId: string;
+    const sellerAddress = seller.zkloginAddress || seller.walletAddress;
 
     try {
-      if (!seller.zkloginAddress) {
-        throw new ValidationError('Seller zklogin address not found');
+      if (!sellerAddress) {
+        throw new ValidationError('Seller address not found (neither zkLogin nor wallet)');
       }
       // Build PTB for creating purchase request and escrow
       const purchaseTx = BlockchainService.buildPurchasePTB(
         {
           datapodId: datapod_id,
           buyer: buyer_address,
-          seller: seller.zkloginAddress,
+          seller: sellerAddress,
           price: Math.floor(datapod.priceSui.toNumber() * 1e9),
           buyerPublicKey: buyer_public_key,
           dataHash: datapod.dataHash,
         },
-        seller.zkloginAddress,
+        sellerAddress,
       );
 
       // Execute transaction with sponsored gas
@@ -139,7 +140,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
         datapodId: datapod.id,
         buyerId: req.user!.address,
         buyerAddress: buyer_address,
-        sellerAddress: seller.zkloginAddress || '',
+        sellerAddress: sellerAddress || '',
         buyerPublicKey: buyer_public_key,
         priceSui: datapod.priceSui,
         status: 'pending',
@@ -152,7 +153,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       purchaseRequest.id,
       datapod.priceSui.toNumber(),
       buyer_address,
-      seller.zkloginAddress || '',
+      sellerAddress || '',
     );
 
     // Store transaction audit
@@ -177,7 +178,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       await queueFulfillmentJob({
         purchase_id: purchaseRequest.id,
         datapod_id: datapod.id,
-        seller_address: seller.zkloginAddress || '',
+        seller_address: sellerAddress || '',
         buyer_address: buyer_address,
         buyer_public_key: buyer_public_key,
         price_sui: datapod.priceSui.toNumber(),
@@ -196,7 +197,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
             purchase_id: purchaseRequestId,
             datapod_id: datapod_id,
             buyer_address: buyer_address,
-            seller_address: seller.zkloginAddress,
+            seller_address: sellerAddress,
             price_sui: datapod.priceSui.toNumber(),
           },
           timestamp: Math.floor(Date.now() / 1000),

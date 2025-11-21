@@ -80,8 +80,13 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
 
     // Store in database
     const uploadId = randomUUID();
-    const seller = await prisma.user.findUnique({
-      where: { zkloginAddress: req.user!.address },
+    const seller = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
     });
 
     if (!seller) {
@@ -180,8 +185,13 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
     }
 
     // Verify seller owns this upload
-    const seller = await prisma.user.findUnique({
-      where: { zkloginAddress: req.user!.address },
+    const seller = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
     });
 
     if (!seller || uploadStaging.sellerId !== seller.id) {
@@ -200,14 +210,15 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
     let txDigest: string;
     let datapodId: string;
     let kioskId: string;
+    const sellerAddress = seller.zkloginAddress || seller.walletAddress;
 
     try {
-      if (!seller.zkloginAddress) {
-        throw new ValidationError('Seller zklogin address not found');
+      if (!sellerAddress) {
+        throw new ValidationError('Seller address not found (neither zkLogin nor wallet)');
       }
 
       // Get seller's Kiosk
-      const kioskData = await BlockchainService.getOrCreateSellerKiosk(seller.zkloginAddress);
+      const kioskData = await BlockchainService.getOrCreateSellerKiosk(sellerAddress);
 
       const priceInMist = BigInt(Math.floor(Number(metadata.price_sui) * 1e9));
       logger.info('Building Publish PTB', {
@@ -226,9 +237,9 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
           dataHash: uploadStaging.dataHash,
           blobId: uploadStaging.filePath,
           uploadId: upload_id,
-          sellerAddress: seller.zkloginAddress,
+          sellerAddress: sellerAddress,
         },
-        seller.zkloginAddress,
+        sellerAddress,
         kioskData,
       );
 
@@ -290,7 +301,7 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
       data: {
         txDigest,
         txType: 'publish_datapod',
-        userAddress: seller.zkloginAddress || '',
+        userAddress: sellerAddress || '',
         userId: seller.id,
         datapodId: datapod.id,
         data: { datapodId, kioskId },
@@ -348,8 +359,13 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
  */
 export const getSellerDataPods = async (req: Request, res: Response): Promise<void> => {
   try {
-    const seller = await prisma.user.findUnique({
-      where: { zkloginAddress: req.user!.address },
+    const seller = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
     });
 
     if (!seller) {
@@ -390,8 +406,13 @@ export const getSellerDataPods = async (req: Request, res: Response): Promise<vo
  */
 export const getSellerStats = async (req: Request, res: Response): Promise<void> => {
   try {
-    const seller = await prisma.user.findUnique({
-      where: { zkloginAddress: req.user!.address },
+    const seller = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
     });
 
     if (!seller) {
