@@ -22,7 +22,8 @@ const CLOCK_ID = '0x6';
 interface DataPodMetadata {
   title: string;
   category: string;
-  price: number;
+  description: string;
+  price: bigint;
   dataHash: string;
   blobId: string;
   uploadId: string;
@@ -119,7 +120,7 @@ export class BlockchainService {
    * Get or create seller's Kiosk
    * Returns Kiosk ID and OwnerCap from on-chain state
    */
-  static async getOrCreateSellerKiosk(seller: string): Promise<KioskData> {
+  static async getOrCreateSellerKiosk(seller: string): Promise<KioskData | null> {
     try {
       const client = this.getClient();
 
@@ -154,12 +155,13 @@ export class BlockchainService {
         }
       }
 
-      // Kiosk not found, would need to create via transaction
-      // For now, throw error - caller should handle kiosk creation
-      throw new Error('No existing Kiosk found for seller');
+      // Kiosk not found
+      return null;
     } catch (error) {
       logger.error('Failed to get seller Kiosk', { error, seller });
-      throw new BlockchainError('Failed to retrieve seller Kiosk');
+      // Return null on error to be safe, or rethrow?
+      // If we can't query, we probably shouldn't try to create one blindly, but let's return null to allow retry/creation attempt
+      return null;
     }
   }
 
@@ -167,42 +169,90 @@ export class BlockchainService {
    * Build PTB for publishing DataPod
    * Creates Kiosk if needed and lists DataPod
    */
+  // ... di dalam class BlockchainService
+  /**
+   * Build PTB for publishing DataPod
+   * Creates Kiosk if needed and lists DataPod
+   */
   static buildPublishPTB(
     datapodMetadata: DataPodMetadata,
     sponsor: string,
-    kioskData: KioskData
+    kioskData: KioskData | null // Asumsi KioskData adalah tipe yang benar
   ): Transaction {
     try {
       const tx = new Transaction();
 
-      // Note: setSponsor is not available in current Sui SDK
+      let kiosk, kioskCap;
+      let isNewKiosk = false;
 
-      const { kioskId, kioskOwnerCap } = kioskData;
+      // --- 1. HANDLE KIOSK ---
+      if (kioskData && kioskData.kioskId && kioskData.kioskOwnerCap) {
+        // Kiosk sudah ada (existing Kiosk)
+        kiosk = tx.object(kioskData.kioskId);
+        kioskCap = tx.object(kioskData.kioskOwnerCap);
+      } else {
+        // Command 0: Create new Kiosk
+        const [newKiosk, newKioskCap] = tx.moveCall({
+          target: '0x2::kiosk::new',
+          arguments: [],
+        });
+        kiosk = newKiosk;      // Result 0 (Kiosk Object)
+        kioskCap = newKioskCap; // Result 1 (Kiosk Owner Cap)
+        isNewKiosk = true;
 
-      // Move call to mint DataPod NFT
-      const datapodTxResult = tx.moveCall({
+        // ❌ MENGHAPUS COMMAND SHARE KIOSK LAMA (Command 1) ❌
+        // Menghindari InvalidValueUsage: Kiosk harus tetap menjadi objek yang
+        // dapat di-mutate oleh Kiosk Owner Cap sebelum ditransfer.
+      }
+      
+      // --- 2. CREATE DATAPOD ---
+      // Command 1 atau 2 (Tergantung isNewKiosk): datapod::create_datapod
+      // Signature Move: 
+      // datapod_id: String, title: String, category: String, description: String, 
+      // price_sui: u64, data_hash: String, blob_id: String, ctx: &mut TxContext
+      const [datapod, ownerCap] = tx.moveCall({ 
         target: `${SUI_PACKAGE_ID}::datapod::create_datapod`,
         arguments: [
-          tx.pure.string(datapodMetadata.title),
-          tx.pure.string(datapodMetadata.category),
-          tx.pure.u64(datapodMetadata.price),
-          tx.pure.string(datapodMetadata.dataHash),
-          tx.pure.string(datapodMetadata.blobId),
-          tx.pure.string(datapodMetadata.uploadId),
-          tx.pure.address(datapodMetadata.sellerAddress),
+          tx.pure.string(datapodMetadata.blobId),        // Arg 0: datapod_id (gunakan blobId)
+          tx.pure.string(datapodMetadata.title),         // Arg 1: title
+          tx.pure.string(datapodMetadata.category),      // Arg 2: category
+          tx.pure.string(datapodMetadata.description),   // Arg 3: description
+          tx.pure.u64(datapodMetadata.price),            // Arg 4: price_sui (u64)
+          tx.pure.string(datapodMetadata.dataHash),      // Arg 5: data_hash
+          tx.pure.string(datapodMetadata.uploadId),      // Arg 6: blob_id (gunakan uploadId) 
         ],
       });
 
-      // List DataPod in Kiosk
+      // --- 3. PLACE DATAPOD IN KIOSK ---
+      // Command 2 atau 3: kiosk::place
       tx.moveCall({
-        target: `${KIOSK_PACKAGE_ID}::kiosk::list`,
+        target: '0x2::kiosk::place',
         arguments: [
-          tx.object(kioskId),
-          tx.object(kioskOwnerCap),
-          datapodTxResult,
-          tx.pure.u64(datapodMetadata.price),
+          kiosk,      // &mut Kiosk
+          kioskCap,   // &KioskOwnerCap
+          datapod,    // T (DataPod)
         ],
+        typeArguments: [`${SUI_PACKAGE_ID}::datapod::DataPod`],
       });
+
+      // --- 4. TRANSFER CAPABILITIES ---
+      
+      // Transfer DataPod Owner Cap (hasil dari Command sebelumnya) ke seller
+      // Command 3 atau 4
+      tx.transferObjects([ownerCap], tx.pure.address(datapodMetadata.sellerAddress));
+
+      if (isNewKiosk) {
+        // Transfer Kiosk Owner Cap ke seller HANYA jika baru dibuat.
+        // Command 4 atau 5
+        tx.transferObjects([kioskCap], tx.pure.address(datapodMetadata.sellerAddress));
+
+        // Command 5 atau 6: Share Kiosk AGAR bisa diakses publik setelah semua mutasi selesai.
+        tx.moveCall({
+            target: '0x2::transfer::public_share_object',
+            arguments: [kiosk],
+            typeArguments: ['0x2::kiosk::Kiosk'],
+        });
+      }
 
       logger.info('Published DataPod PTB built', {
         seller: datapodMetadata.sellerAddress,
@@ -213,59 +263,6 @@ export class BlockchainService {
     } catch (error) {
       logger.error('Failed to build publish PTB', { error });
       throw new BlockchainError('Failed to build publish transaction');
-    }
-  }
-
-  /**
-   * Build PTB for purchasing DataPod
-   * Creates PurchaseRequest and Escrow atomically with sponsored gas
-   */
-  static buildPurchasePTB(
-    purchaseData: PurchaseData,
-    sponsor: string
-  ): Transaction {
-    try {
-      const tx = new Transaction();
-
-      // Note: setSponsor is not available in current Sui SDK
-      // Sponsor setup should be handled at transaction execution level
-
-      // Split coins for payment (assumes buyer has SUI)
-      const coinInputs = tx.splitCoins(tx.gas, [tx.pure.u64(purchaseData.price)]);
-
-      // Create PurchaseRequest
-      const purchaseRequest = tx.moveCall({
-        target: `${SUI_PACKAGE_ID}::purchase::create_purchase_request`,
-        arguments: [
-          tx.pure.address(purchaseData.datapodId),
-          tx.pure.address(purchaseData.buyer),
-          tx.pure.address(purchaseData.seller),
-          tx.pure.string(purchaseData.dataHash),
-          tx.pure.string(purchaseData.buyerPublicKey),
-        ],
-      });
-
-      // Create Escrow and deposit payment
-      tx.moveCall({
-        target: `${SUI_PACKAGE_ID}::escrow::create_escrow`,
-        arguments: [
-          purchaseRequest,
-          coinInputs,
-          tx.pure.u64(purchaseData.price),
-          tx.pure.address(purchaseData.seller),
-        ],
-      });
-
-      logger.info('Purchase PTB built', {
-        buyer: purchaseData.buyer,
-        datapodId: purchaseData.datapodId,
-        price: purchaseData.price,
-      });
-
-      return tx;
-    } catch (error) {
-      logger.error('Failed to build purchase PTB', { error });
-      throw new BlockchainError('Failed to build purchase transaction');
     }
   }
 
@@ -327,17 +324,63 @@ export class BlockchainService {
         // Sign transaction with sponsor's private key
         const sponsorPrivateKey = env.SUI_SPONSOR_PRIVATE_KEY;
 
-        // Create keypair from private key (expects base64 format)
-        const keypair = Secp256k1Keypair.fromSecretKey(
-          Buffer.from(sponsorPrivateKey, 'base64')
-        );
+        let privateKeyBytes: Uint8Array;
+
+        try {
+          // Try to decode as standard Sui private key (suiprivkey...)
+          const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
+          privateKeyBytes = decoded.secretKey;
+        } catch (e) {
+          // Fallback: try as raw base64 (legacy)
+          try {
+            privateKeyBytes = new Uint8Array(Buffer.from(sponsorPrivateKey, 'base64'));
+          } catch (err) {
+            throw new Error('Invalid private key format');
+          }
+        }
+
+        // Debug key length
+        // console.log(`Sponsor private key length: ${privateKeyBytes.length} bytes`);
+
+        if (privateKeyBytes.length !== 32) {
+          if (privateKeyBytes.length === 64) {
+            privateKeyBytes = privateKeyBytes.slice(0, 32);
+          } else {
+            throw new Error(`Invalid private key length: expected 32 bytes, got ${privateKeyBytes.length}`);
+          }
+        }
+
+        let keypair;
+        try {
+          const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
+          if (decoded.schema === 'ED25519') {
+            keypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
+          } else if (decoded.schema === 'Secp256k1') {
+            keypair = Secp256k1Keypair.fromSecretKey(decoded.secretKey);
+          } else if (decoded.schema === 'Secp256r1') {
+            keypair = Secp256r1Keypair.fromSecretKey(decoded.secretKey);
+          } else {
+            throw new Error(`Unsupported key schema: ${decoded.schema}`);
+          }
+        } catch (e) {
+          keypair = Secp256k1Keypair.fromSecretKey(privateKeyBytes);
+        }
+
+        // Set sender to sponsor address
+        transaction.setSender(keypair.toSuiAddress());
+
+        // Set gas budget (standard amount, can be adjusted)
+        transaction.setGasBudget(100000000); // 0.1 SUI
+
+        // Build the transaction bytes
+        const bytes = await transaction.build({ client });
 
         // Sign the transaction
-        const signedTransaction = await transaction.sign({ signer: keypair });
+        const signedTransaction = await keypair.signTransaction(bytes);
 
         // Execute the signed transaction
         const result = await client.executeTransactionBlock({
-          transactionBlock: signedTransaction.bytes,
+          transactionBlock: bytes,
           signature: signedTransaction.signature,
           options: {
             showEffects: true,
@@ -350,17 +393,33 @@ export class BlockchainService {
           status: result.effects?.status.status,
         });
 
+        if (result.effects?.status.status === 'failure') {
+          throw new Error(`Transaction failed on-chain: ${result.effects.status.error}`);
+        }
+
         return result.digest;
       } else {
         // For non-sponsored transactions (not implemented yet)
         throw new Error('Non-sponsored transactions not implemented');
       }
     } catch (error) {
+      // Enhanced error logging
+      const errorDetails = error instanceof Error ? error.message : String(error);
+      const errorObj = typeof error === 'object' ? JSON.stringify(error, null, 2) : String(error);
+
+      console.error('----------------------------------------');
+      console.error('BLOCKCHAIN TRANSACTION ERROR:');
+      console.error(errorDetails);
+      console.error('FULL ERROR OBJECT:');
+      console.error(errorObj);
+      console.error('----------------------------------------');
+
       logger.error('Transaction execution failed', {
-        error: error instanceof Error ? error.message : String(error),
+        error: errorDetails,
+        fullError: errorObj,
         sponsor,
       });
-      throw new BlockchainError('Transaction execution failed');
+      throw new BlockchainError(`Transaction execution failed: ${errorDetails}`);
     }
   }
 

@@ -173,19 +173,31 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
       if (!seller.zkloginAddress) {
         throw new ValidationError('Seller zklogin address not found');
       }
+
+      // Get seller's Kiosk
+      const kioskData = await BlockchainService.getOrCreateSellerKiosk(seller.zkloginAddress);
+
+      const priceInMist = BigInt(Math.floor(Number(metadata.price_sui) * 1e9));
+      logger.info('Building Publish PTB', {
+        priceSui: metadata.price_sui,
+        priceMist: priceInMist.toString(),
+        typeOfPriceSui: typeof metadata.price_sui
+      });
+
       // Build PTB for publishing DataPod
       const publishTx = BlockchainService.buildPublishPTB(
         {
           title: metadata.title,
           category: metadata.category,
-          price: Math.floor(metadata.price_sui * 1e9), // Convert to MIST
+          description: metadata.description || '',
+          price: priceInMist, // Convert to MIST (BigInt)
           dataHash: uploadStaging.dataHash,
           blobId: uploadStaging.filePath,
           uploadId: upload_id,
           sellerAddress: seller.zkloginAddress,
         },
         seller.zkloginAddress,
-        { kioskId: '', kioskOwnerCap: '' },
+        kioskData,
       );
 
       // Execute transaction with sponsored gas

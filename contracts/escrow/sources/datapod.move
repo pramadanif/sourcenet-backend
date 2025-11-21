@@ -27,7 +27,7 @@ module sourcenet::datapod {
     }
 
     /// DataPod owner capability
-    public struct DataPodOwnerCap has key {
+    public struct DataPodOwnerCap has key, store {
         id: UID,
         datapod_id: address,
     }
