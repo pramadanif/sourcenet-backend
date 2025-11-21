@@ -10,6 +10,7 @@ import { CacheService } from '@/services/cache.service';
 import { queueFulfillmentJob } from '@/jobs/fulfillment.job';
 import { ValidationError, BlockchainError } from '@/types/errors.types';
 import { Decimal } from '@prisma/client/runtime/library';
+import { env } from '@/config/env';
 
 /**
  * Create purchase endpoint
@@ -106,11 +107,11 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
           buyerPublicKey: buyer_public_key,
           dataHash: datapod.dataHash,
         },
-        sellerAddress,
+        env.SUI_SPONSOR_ADDRESS,
       );
 
       // Execute transaction with sponsored gas
-      txDigest = await BlockchainService.executeTransaction(purchaseTx, true);
+      txDigest = await BlockchainService.executeTransaction(purchaseTx);
 
       // Wait for transaction confirmation
       await BlockchainService.waitForTransaction(txDigest);

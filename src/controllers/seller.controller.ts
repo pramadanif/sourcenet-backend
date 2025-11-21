@@ -268,14 +268,6 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
       throw new BlockchainError('Failed to publish DataPod on blockchain');
     }
 
-    // Update upload staging
-    await prisma.uploadStaging.update({
-      where: { id: upload_id },
-      data: {
-        status: 'published',
-      },
-    });
-
     // Create DataPod record with blockchain transaction digest
     const datapod = await prisma.dataPod.create({
       data: {
@@ -293,6 +285,15 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
         blobId: uploadStaging.filePath,
         kioskId,
         publishedAt: new Date(),
+      },
+    });
+
+    // Update upload staging with published status and link to DataPod
+    await prisma.uploadStaging.update({
+      where: { id: upload_id },
+      data: {
+        status: 'published',
+        datapodId: datapod.id,
       },
     });
 

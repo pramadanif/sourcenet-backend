@@ -5,6 +5,7 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Secp256k1Keypair } from '@mysten/sui/keypairs/secp256k1';
 import { Secp256r1Keypair } from '@mysten/sui/keypairs/secp256r1';
 import { sign as naclSign } from 'tweetnacl';
+import { randomUUID } from 'crypto';
 import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
 import { BlockchainError } from '@/types/errors.types';
@@ -159,17 +160,10 @@ export class BlockchainService {
       return null;
     } catch (error) {
       logger.error('Failed to get seller Kiosk', { error, seller });
-      // Return null on error to be safe, or rethrow?
-      // If we can't query, we probably shouldn't try to create one blindly, but let's return null to allow retry/creation attempt
       return null;
     }
   }
 
-  /**
-   * Build PTB for publishing DataPod
-   * Creates Kiosk if needed and lists DataPod
-   */
-  // ... di dalam class BlockchainService
   /**
    * Build PTB for publishing DataPod
    * Creates Kiosk if needed and lists DataPod
@@ -210,6 +204,49 @@ export class BlockchainService {
     }
   }
 
+  /**
+   * Build PTB for creating a purchase request
+   */
+  static buildPurchasePTB(
+    purchaseData: PurchaseData,
+    sponsor: string
+  ): Transaction {
+    try {
+      const tx = new Transaction();
+      const purchaseId = randomUUID();
+
+      // Create purchase object
+      const [purchaseRequest, purchaseOwnerCap] = tx.moveCall({
+        target: `${SUI_PACKAGE_ID}::purchase::create_purchase`,
+        arguments: [
+          tx.pure.string(purchaseId),
+          tx.pure.string(purchaseData.datapodId),
+          tx.pure.address(purchaseData.buyer),
+          tx.pure.address(purchaseData.seller),
+          tx.pure.string(purchaseData.buyerPublicKey),
+          tx.pure.u64(purchaseData.price),
+          tx.pure.string(purchaseData.dataHash),
+        ],
+      });
+
+      // Transfer PurchaseRequest to seller so they can see it
+      tx.transferObjects([purchaseRequest], tx.pure.address(purchaseData.seller));
+
+      // Transfer PurchaseOwnerCap to sponsor (backend) so we can manage it
+      tx.transferObjects([purchaseOwnerCap], tx.pure.address(sponsor));
+
+      logger.info('Purchase PTB built', {
+        purchaseId,
+        buyer: purchaseData.buyer,
+        seller: purchaseData.seller,
+      });
+
+      return tx;
+    } catch (error) {
+      logger.error('Failed to build purchase PTB', { error });
+      throw new BlockchainError('Failed to build purchase transaction');
+    }
+  }
 
   /**
    * Build PTB for releasing payment to seller after fulfillment
@@ -243,11 +280,6 @@ export class BlockchainService {
         ],
       });
 
-      logger.info('Release payment PTB built', {
-        purchaseId,
-        seller,
-      });
-
       return tx;
     } catch (error) {
       logger.error('Failed to build release payment PTB', { error });
@@ -255,135 +287,85 @@ export class BlockchainService {
     }
   }
 
-  static buildPurchasePTB(
-    purchaseData: PurchaseData,
-    sponsor: string
-  ): Transaction {
-    try {
-      const tx = new Transaction();
-
-      // Create purchase object
-      const [purchase] = tx.moveCall({
-        target: `${SUI_PACKAGE_ID}::purchase::create_purchase`,
-        arguments: [
-          tx.object(CLOCK_ID),
-          tx.pure.address(purchaseData.buyer),
-          tx.pure.address(purchaseData.seller),
-          tx.pure.u64(purchaseData.price),
-          tx.pure.address(purchaseData.buyerPublicKey),
-          tx.pure.string(purchaseData.dataHash),
-        ],
-      });
-
-      // Transfer coin to seller
-      tx.transferObjects([purchase], tx.pure.address(purchaseData.seller));
-
-      // purchase is a NestedResult reference from the Transaction builder and does not have an objectId property,
-      // so log the buyer/seller and include the purchase reference instead of accessing purchase.objectId.
-      logger.info('Purchase PTB built', {
-        purchaseRef: purchase,
-        buyer: purchaseData.buyer,
-        seller: purchaseData.seller,
-      });
-
-      return tx;
-    } catch (error) {
-      logger.error('Failed to build purchase PTB', { error });
-      throw new BlockchainError('Failed to build purchase transaction');
-    }
-  }
   /**
-   * Execute transaction on blockchain with sponsored gas fees
+   * Execute a transaction block with sponsor signature
    */
-  static async executeTransaction(
-    transaction: Transaction,
-    sponsor: boolean = true
-  ): Promise<string> {
+  static async executeTransaction(transaction: Transaction): Promise<string> {
     try {
       const client = this.getClient();
+      const sponsorPrivateKey = env.SUI_SPONSOR_PRIVATE_KEY;
 
-      if (sponsor) {
-        // Sign transaction with sponsor's private key
-        const sponsorPrivateKey = env.SUI_SPONSOR_PRIVATE_KEY;
+      let privateKeyBytes: Uint8Array;
 
-        let privateKeyBytes: Uint8Array;
-
+      try {
+        // Try to decode as standard Sui private key (suiprivkey...)
+        const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
+        privateKeyBytes = decoded.secretKey;
+      } catch (e) {
+        // Fallback: try as raw base64 (legacy)
         try {
-          // Try to decode as standard Sui private key (suiprivkey...)
-          const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
-          privateKeyBytes = decoded.secretKey;
-        } catch (e) {
-          // Fallback: try as raw base64 (legacy)
-          try {
-            privateKeyBytes = new Uint8Array(Buffer.from(sponsorPrivateKey, 'base64'));
-          } catch (err) {
-            throw new Error('Invalid private key format');
-          }
+          privateKeyBytes = new Uint8Array(Buffer.from(sponsorPrivateKey, 'base64'));
+        } catch (err) {
+          throw new Error('Invalid private key format');
         }
-
-        // Debug key length
-        // console.log(`Sponsor private key length: ${privateKeyBytes.length} bytes`);
-
-        if (privateKeyBytes.length !== 32) {
-          if (privateKeyBytes.length === 64) {
-            privateKeyBytes = privateKeyBytes.slice(0, 32);
-          } else {
-            throw new Error(`Invalid private key length: expected 32 bytes, got ${privateKeyBytes.length}`);
-          }
-        }
-
-        let keypair;
-        try {
-          const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
-          if (decoded.schema === 'ED25519') {
-            keypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
-          } else if (decoded.schema === 'Secp256k1') {
-            keypair = Secp256k1Keypair.fromSecretKey(decoded.secretKey);
-          } else if (decoded.schema === 'Secp256r1') {
-            keypair = Secp256r1Keypair.fromSecretKey(decoded.secretKey);
-          } else {
-            throw new Error(`Unsupported key schema: ${decoded.schema}`);
-          }
-        } catch (e) {
-          keypair = Secp256k1Keypair.fromSecretKey(privateKeyBytes);
-        }
-
-        // Set sender to sponsor address
-        transaction.setSender(keypair.toSuiAddress());
-
-        // Set gas budget (standard amount, can be adjusted)
-        transaction.setGasBudget(100000000); // 0.1 SUI
-
-        // Build the transaction bytes
-        const bytes = await transaction.build({ client });
-
-        // Sign the transaction
-        const signedTransaction = await keypair.signTransaction(bytes);
-
-        // Execute the signed transaction
-        const result = await client.executeTransactionBlock({
-          transactionBlock: bytes,
-          signature: signedTransaction.signature,
-          options: {
-            showEffects: true,
-            showEvents: true,
-          },
-        });
-
-        logger.info('Sponsored transaction executed', {
-          digest: result.digest,
-          status: result.effects?.status.status,
-        });
-
-        if (result.effects?.status.status === 'failure') {
-          throw new Error(`Transaction failed on-chain: ${result.effects.status.error}`);
-        }
-
-        return result.digest;
-      } else {
-        // For non-sponsored transactions (not implemented yet)
-        throw new Error('Non-sponsored transactions not implemented');
       }
+
+      if (privateKeyBytes.length !== 32) {
+        if (privateKeyBytes.length === 64) {
+          privateKeyBytes = privateKeyBytes.slice(0, 32);
+        } else {
+          throw new Error(`Invalid private key length: expected 32 bytes, got ${privateKeyBytes.length}`);
+        }
+      }
+
+      let keypair;
+      try {
+        const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
+        if (decoded.schema === 'ED25519') {
+          keypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
+        } else if (decoded.schema === 'Secp256k1') {
+          keypair = Secp256k1Keypair.fromSecretKey(decoded.secretKey);
+        } else if (decoded.schema === 'Secp256r1') {
+          keypair = Secp256r1Keypair.fromSecretKey(decoded.secretKey);
+        } else {
+          throw new Error(`Unsupported key schema: ${decoded.schema}`);
+        }
+      } catch (e) {
+        keypair = Secp256k1Keypair.fromSecretKey(privateKeyBytes);
+      }
+
+      // Set sender to sponsor address
+      transaction.setSender(keypair.toSuiAddress());
+
+      // Set gas budget (standard amount, can be adjusted)
+      transaction.setGasBudget(100000000); // 0.1 SUI
+
+      // Build the transaction bytes
+      const bytes = await transaction.build({ client });
+
+      // Sign the transaction
+      const signedTransaction = await keypair.signTransaction(bytes);
+
+      // Execute the signed transaction
+      const result = await client.executeTransactionBlock({
+        transactionBlock: bytes,
+        signature: signedTransaction.signature,
+        options: {
+          showEffects: true,
+          showEvents: true,
+        },
+      });
+
+      logger.info('Sponsored transaction executed', {
+        digest: result.digest,
+        status: result.effects?.status.status,
+      });
+
+      if (result.effects?.status.status === 'failure') {
+        throw new Error(`Transaction failed on-chain: ${result.effects.status.error}`);
+      }
+
+      return result.digest;
     } catch (error) {
       // Enhanced error logging
       const errorDetails = error instanceof Error ? error.message : String(error);
@@ -399,7 +381,6 @@ export class BlockchainService {
       logger.error('Transaction execution failed', {
         error: errorDetails,
         fullError: errorObj,
-        sponsor,
       });
       throw new BlockchainError(`Transaction execution failed: ${errorDetails}`);
     }
