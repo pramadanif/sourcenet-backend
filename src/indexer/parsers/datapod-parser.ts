@@ -13,8 +13,8 @@ const DataPodPublishedSchema = z.object({
     }
     return BigInt(v);
   }),
-  data_hash: z.string(),
-  kiosk_id: z.string().optional(),
+  data_hash: z.string().optional(),
+  kiosk_id: z.string().optional().transform((v) => v || ''),
 });
 
 export type DataPodPublishedEvent = z.infer<typeof DataPodPublishedSchema>;

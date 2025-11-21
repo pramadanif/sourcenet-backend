@@ -393,28 +393,241 @@ export const downloadData = async (req: Request, res: Response): Promise<void> =
 };
 
 /**
+ * Get buyer purchases with pagination and filtering
+ */
+export const getBuyerPurchases = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { page = 1, limit = 20, status } = req.query as any;
+
+    // Validate and clamp pagination
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build filters
+    const where: any = {
+      buyerAddress: req.user!.address,
+    };
+
+    if (status && ['completed', 'pending', 'failed', 'refunded'].includes(status)) {
+      where.status = status;
+    }
+
+    logger.info('Fetching buyer purchases', {
+      requestId: req.requestId,
+      buyerAddress: req.user!.address,
+      page: pageNum,
+      limit: limitNum,
+      status,
+    });
+
+    // Query database with pagination
+    const [purchases, total] = await Promise.all([
+      prisma.purchaseRequest.findMany({
+        where,
+        include: {
+          datapod: {
+            select: {
+              datapodId: true,
+              title: true,
+              category: true,
+              priceSui: true,
+              sellerId: true,
+            },
+          },
+          review: {
+            select: {
+              id: true,
+              rating: true,
+              comment: true,
+              createdAt: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limitNum,
+      }),
+      prisma.purchaseRequest.count({ where }),
+    ]);
+
+    // Get seller information for each purchase
+    const purchasesWithSeller = await Promise.all(
+      purchases.map(async (purchase) => {
+        let sellerInfo = null;
+
+        if (purchase.datapod?.sellerId) {
+          const seller = await prisma.user.findUnique({
+            where: { id: purchase.datapod.sellerId },
+            select: {
+              id: true,
+              zkloginAddress: true,
+              walletAddress: true,
+              username: true,
+            },
+          });
+
+          if (seller) {
+            sellerInfo = {
+              address: seller.zkloginAddress || seller.walletAddress || '',
+              username: seller.username || 'Anonymous',
+            };
+          }
+        }
+
+        return {
+          id: purchase.id,
+          dataPod: purchase.datapod
+            ? {
+              datapodId: purchase.datapod.datapodId,
+              title: purchase.datapod.title,
+              category: purchase.datapod.category,
+            }
+            : null,
+          seller: sellerInfo,
+          priceSui: purchase.priceSui.toNumber(),
+          status: purchase.status,
+          createdAt: purchase.createdAt.toISOString(),
+          review: purchase.review
+            ? {
+              rating: purchase.review.rating,
+            }
+            : undefined,
+        };
+      }),
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        purchases: purchasesWithSeller,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    logger.error('Get buyer purchases failed', { error, requestId: req.requestId });
+    throw error;
+  }
+};
+
+/**
  * Submit review for purchase
  */
 export const submitReview = async (req: Request, res: Response): Promise<void> => {
   try {
-    const purchases = await prisma.purchaseRequest.findMany({
-      where: {
-        buyerAddress: req.user!.address,
-      },
+    const { purchase_id } = req.params;
+    const { rating, comment } = req.body;
+
+    if (!purchase_id) {
+      throw new ValidationError('Missing purchase_id');
+    }
+
+    if (!rating || rating < 1 || rating > 5) {
+      throw new ValidationError('Rating must be between 1 and 5');
+    }
+
+    if (!comment || comment.trim().length === 0) {
+      throw new ValidationError('Comment is required');
+    }
+
+    // Get purchase request
+    const purchase = await prisma.purchaseRequest.findUnique({
+      where: { id: purchase_id },
       include: {
         datapod: true,
       },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
+    });
+
+    if (!purchase) {
+      throw new ValidationError('Purchase not found');
+    }
+
+    // Verify ownership
+    if (purchase.buyerAddress !== req.user!.address) {
+      throw new ValidationError('Unauthorized: you do not own this purchase');
+    }
+
+    // Verify purchase is completed
+    if (purchase.status !== 'completed') {
+      throw new ValidationError(`Cannot review purchase with status: ${purchase.status}`);
+    }
+
+    // Check if review already exists
+    const existingReview = await prisma.review.findFirst({
+      where: {
+        purchaseRequestId: purchase_id,
+      },
+    });
+
+    if (existingReview) {
+      throw new ValidationError('Review already exists for this purchase');
+    }
+
+    logger.info('Creating review', {
+      requestId: req.requestId,
+      purchaseId: purchase_id,
+      rating,
+      datapodId: purchase.datapodId,
+    });
+
+    // Create review
+    const review = await prisma.review.create({
+      data: {
+        purchaseRequestId: purchase_id,
+        datapodId: purchase.datapodId,
+        buyerId: purchase.buyerId,
+        buyerAddress: purchase.buyerAddress,
+        rating,
+        comment: comment.trim(),
+      },
+    });
+
+    // Update datapod average rating
+    const reviews = await prisma.review.findMany({
+      where: { datapodId: purchase.datapodId },
+      select: { rating: true },
+    });
+
+    const averageRating = reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length;
+
+    await prisma.dataPod.update({
+      where: { id: purchase.datapodId },
+      data: {
+        averageRating: new Decimal(averageRating),
+      },
+    });
+
+    // Invalidate cache
+    await CacheService.invalidateDataPodCache(purchase.datapod!.datapodId);
+
+    logger.info('Review created successfully', {
+      requestId: req.requestId,
+      reviewId: review.id,
+      averageRating,
     });
 
     res.status(200).json({
       status: 'success',
-      count: purchases.length,
-      purchases,
+      data: {
+        review: {
+          id: review.id,
+          rating: review.rating,
+          comment: review.comment,
+          createdAt: review.createdAt.toISOString(),
+        },
+        datapod: {
+          averageRating,
+          totalReviews: reviews.length,
+        },
+      },
     });
   } catch (error) {
-    logger.error('Get buyer purchases failed', { error, requestId: req.requestId });
+    logger.error('Submit review failed', { error, requestId: req.requestId });
     throw error;
   }
 };

@@ -12,7 +12,7 @@ import { retry } from '@/utils/helpers';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
-const TX_TIMEOUT = 60000; // 60 seconds
+const TX_TIMEOUT = 120000; // 120 seconds
 
 // Sui package IDs and addresses
 const SUI_PACKAGE_ID = env.SOURCENET_PACKAGE_ID;
@@ -177,82 +177,26 @@ export class BlockchainService {
   static buildPublishPTB(
     datapodMetadata: DataPodMetadata,
     sponsor: string,
-    kioskData: KioskData | null // Asumsi KioskData adalah tipe yang benar
+    kioskData: KioskData | null
   ): Transaction {
     try {
       const tx = new Transaction();
 
-      let kiosk, kioskCap;
-      let isNewKiosk = false;
-
-      // --- 1. HANDLE KIOSK ---
-      if (kioskData && kioskData.kioskId && kioskData.kioskOwnerCap) {
-        // Kiosk sudah ada (existing Kiosk)
-        kiosk = tx.object(kioskData.kioskId);
-        kioskCap = tx.object(kioskData.kioskOwnerCap);
-      } else {
-        // Command 0: Create new Kiosk
-        const [newKiosk, newKioskCap] = tx.moveCall({
-          target: '0x2::kiosk::new',
-          arguments: [],
-        });
-        kiosk = newKiosk;      // Result 0 (Kiosk Object)
-        kioskCap = newKioskCap; // Result 1 (Kiosk Owner Cap)
-        isNewKiosk = true;
-
-        // ❌ MENGHAPUS COMMAND SHARE KIOSK LAMA (Command 1) ❌
-        // Menghindari InvalidValueUsage: Kiosk harus tetap menjadi objek yang
-        // dapat di-mutate oleh Kiosk Owner Cap sebelum ditransfer.
-      }
-      
-      // --- 2. CREATE DATAPOD ---
-      // Command 1 atau 2 (Tergantung isNewKiosk): datapod::create_datapod
-      // Signature Move: 
-      // datapod_id: String, title: String, category: String, description: String, 
-      // price_sui: u64, data_hash: String, blob_id: String, ctx: &mut TxContext
-      const [datapod, ownerCap] = tx.moveCall({ 
+      // --- 1. CREATE DATAPOD ---
+      // Call create_datapod - objects are transferred within Move function
+      // Do NOT capture return values as they're already transferred
+      tx.moveCall({
         target: `${SUI_PACKAGE_ID}::datapod::create_datapod`,
         arguments: [
-          tx.pure.string(datapodMetadata.blobId),        // Arg 0: datapod_id (gunakan blobId)
-          tx.pure.string(datapodMetadata.title),         // Arg 1: title
-          tx.pure.string(datapodMetadata.category),      // Arg 2: category
-          tx.pure.string(datapodMetadata.description),   // Arg 3: description
-          tx.pure.u64(datapodMetadata.price),            // Arg 4: price_sui (u64)
-          tx.pure.string(datapodMetadata.dataHash),      // Arg 5: data_hash
-          tx.pure.string(datapodMetadata.uploadId),      // Arg 6: blob_id (gunakan uploadId) 
+          tx.pure.string(datapodMetadata.blobId),
+          tx.pure.string(datapodMetadata.title),
+          tx.pure.string(datapodMetadata.category),
+          tx.pure.string(datapodMetadata.description),
+          tx.pure.u64(datapodMetadata.price),
+          tx.pure.string(datapodMetadata.dataHash),
+          tx.pure.string(datapodMetadata.uploadId),
         ],
       });
-
-      // --- 3. PLACE DATAPOD IN KIOSK ---
-      // Command 2 atau 3: kiosk::place
-      tx.moveCall({
-        target: '0x2::kiosk::place',
-        arguments: [
-          kiosk,      // &mut Kiosk
-          kioskCap,   // &KioskOwnerCap
-          datapod,    // T (DataPod)
-        ],
-        typeArguments: [`${SUI_PACKAGE_ID}::datapod::DataPod`],
-      });
-
-      // --- 4. TRANSFER CAPABILITIES ---
-      
-      // Transfer DataPod Owner Cap (hasil dari Command sebelumnya) ke seller
-      // Command 3 atau 4
-      tx.transferObjects([ownerCap], tx.pure.address(datapodMetadata.sellerAddress));
-
-      if (isNewKiosk) {
-        // Transfer Kiosk Owner Cap ke seller HANYA jika baru dibuat.
-        // Command 4 atau 5
-        tx.transferObjects([kioskCap], tx.pure.address(datapodMetadata.sellerAddress));
-
-        // Command 5 atau 6: Share Kiosk AGAR bisa diakses publik setelah semua mutasi selesai.
-        tx.moveCall({
-            target: '0x2::transfer::public_share_object',
-            arguments: [kiosk],
-            typeArguments: ['0x2::kiosk::Kiosk'],
-        });
-      }
 
       logger.info('Published DataPod PTB built', {
         seller: datapodMetadata.sellerAddress,
@@ -265,6 +209,7 @@ export class BlockchainService {
       throw new BlockchainError('Failed to build publish transaction');
     }
   }
+
 
   /**
    * Build PTB for releasing payment to seller after fulfillment
@@ -310,6 +255,43 @@ export class BlockchainService {
     }
   }
 
+  static buildPurchasePTB(
+    purchaseData: PurchaseData,
+    sponsor: string
+  ): Transaction {
+    try {
+      const tx = new Transaction();
+
+      // Create purchase object
+      const [purchase] = tx.moveCall({
+        target: `${SUI_PACKAGE_ID}::purchase::create_purchase`,
+        arguments: [
+          tx.object(CLOCK_ID),
+          tx.pure.address(purchaseData.buyer),
+          tx.pure.address(purchaseData.seller),
+          tx.pure.u64(purchaseData.price),
+          tx.pure.address(purchaseData.buyerPublicKey),
+          tx.pure.string(purchaseData.dataHash),
+        ],
+      });
+
+      // Transfer coin to seller
+      tx.transferObjects([purchase], tx.pure.address(purchaseData.seller));
+
+      // purchase is a NestedResult reference from the Transaction builder and does not have an objectId property,
+      // so log the buyer/seller and include the purchase reference instead of accessing purchase.objectId.
+      logger.info('Purchase PTB built', {
+        purchaseRef: purchase,
+        buyer: purchaseData.buyer,
+        seller: purchaseData.seller,
+      });
+
+      return tx;
+    } catch (error) {
+      logger.error('Failed to build purchase PTB', { error });
+      throw new BlockchainError('Failed to build purchase transaction');
+    }
+  }
   /**
    * Execute transaction on blockchain with sponsored gas fees
    */
@@ -433,9 +415,16 @@ export class BlockchainService {
     try {
       const client = this.getClient();
       const startTime = Date.now();
+      let attempts = 0;
+
+      // Initial delay to allow transaction to be indexed
+      logger.debug('Waiting for initial indexing', { digest });
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       while (Date.now() - startTime < timeout) {
+        attempts++;
         try {
+          logger.debug('Polling transaction status', { digest, attempts });
           const tx = await client.getTransactionBlock({
             digest,
             options: {
@@ -445,24 +434,32 @@ export class BlockchainService {
           });
 
           if (tx.effects?.status.status === 'success') {
-            logger.info('Transaction confirmed', { digest });
+            logger.info('Transaction confirmed', { digest, attempts });
             return tx;
           }
 
           if (tx.effects?.status.status === 'failure') {
             throw new Error(`Transaction failed: ${tx.effects.status.error}`);
           }
+
+          // If we got here without success/failure, wait and retry
+          const elapsed = Date.now() - startTime;
+          logger.debug('Transaction still pending', { digest, attempts, elapsed });
+          await new Promise((resolve) => setTimeout(resolve, 2000));
         } catch (error) {
-          if (error instanceof Error && error.message.includes('not found')) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          if (errorMsg.includes('not found')) {
             // Transaction not yet indexed, wait and retry
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const elapsed = Date.now() - startTime;
+            logger.debug('Transaction not yet indexed', { digest, attempts, elapsed });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
             continue;
           }
           throw error;
         }
       }
 
-      throw new Error('Transaction confirmation timeout');
+      throw new Error(`Transaction confirmation timeout after ${attempts} attempts`);
     } catch (error) {
       logger.error('Failed to wait for transaction', { error, digest });
       throw new BlockchainError('Transaction confirmation failed');

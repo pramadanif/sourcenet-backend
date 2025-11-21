@@ -88,6 +88,38 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
       throw new ValidationError('Seller not found');
     }
 
+    // Check for existing upload with same data_hash
+    const existingUpload = await prisma.uploadStaging.findUnique({
+      where: { dataHash },
+    });
+
+    if (existingUpload) {
+      logger.info('Upload with same data hash already exists', {
+        requestId: req.requestId,
+        existingUploadId: existingUpload.id,
+        dataHash,
+      });
+
+      // If it exists and is already published, reject with appropriate message
+      if (existingUpload.status === 'published') {
+        throw new ValidationError(
+          'A DataPod with this content already exists in the marketplace. Upload unique content.'
+        );
+      }
+
+      // If pending/expired, return the existing upload
+      res.status(200).json({
+        status: 'success',
+        upload_id: existingUpload.id,
+        data_hash: dataHash,
+        preview_data: previewData.substring(0, 500),
+        file_size: file.size,
+        message: 'File matches existing upload. Using existing staging record.',
+        warning: 'This content is already in your uploads',
+      });
+      return;
+    }
+
     const uploadStaging = await prisma.uploadStaging.create({
       data: {
         sellerId: seller.id,
