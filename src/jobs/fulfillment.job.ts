@@ -412,15 +412,33 @@ async function uploadEncryptedBlob(
  */
 async function updateBlockchain(
   purchaseId: string,
+  suiPurchaseId: string,
   datapodId: string,
   buyerAddress: string,
+  sellerAddress: string,
   blobId: string,
   priceSui: number,
 ): Promise<string> {
   const startTime = performance.now();
   try {
+    // Get PurchaseOwnerCap ID (owned by sponsor)
+    // Note: suiPurchaseId is the actual Object ID of the PurchaseRequest (shared object)
+    const purchaseOwnerCapId = await BlockchainService.getPurchaseOwnerCap(
+      suiPurchaseId,
+      env.SUI_SPONSOR_ADDRESS
+    );
+
+    if (!purchaseOwnerCapId) {
+      throw new Error(`PurchaseOwnerCap not found for purchase ${purchaseId} (Sui ID: ${suiPurchaseId}) owned by sponsor`);
+    }
+
     // Build PTB transaction for blockchain update
-    const tx = BlockchainService.buildReleasePaymentPTB(purchaseId, buyerAddress, env.SUI_SPONSOR_ADDRESS);
+    const tx = BlockchainService.buildReleasePaymentPTB(
+      suiPurchaseId,
+      purchaseOwnerCapId,
+      buyerAddress,
+      env.SUI_SPONSOR_ADDRESS
+    );
 
     const txDigest = await retryWithCustomDelays(
       async () => {
@@ -714,10 +732,13 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
     const encryptedBlobId = await uploadEncryptedBlob(purchase_id, encryptedPayload);
 
     // Step 5: Update blockchain with blob_id
+    // Step 5: Update blockchain with blob_id
     const txDigest = await updateBlockchain(
       purchase_id,
+      purchaseRequest.purchaseRequestId,
       datapod_id,
       buyer_address,
+      seller_address,
       encryptedBlobId,
       price_sui,
     );
@@ -746,6 +767,17 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
       message: 'Purchase fulfilled: file decrypted, re-encrypted, and payment released',
     });
   } catch (error) {
+    console.error('----------------------------------------');
+    console.error('CRITICAL FULFILLMENT ERROR:', error);
+    // @ts-ignore
+    if (error.response) {
+      // @ts-ignore
+      console.error('Axios Status:', error.response?.status);
+      // @ts-ignore
+      console.error('Axios Data:', JSON.stringify(error.response?.data, null, 2));
+    }
+    console.error('----------------------------------------');
+
     logger.error('Fulfillment job processing failed', {
       jobId: job.id,
       purchaseId: purchase_id,
@@ -756,13 +788,14 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
 
     // Mark purchase as failed
     try {
-      await prisma.purchaseRequest.update({
-        where: { id: purchase_id },
-        data: {
-          status: 'failed',
-        },
-      });
-      logger.warn(`[purchase:${purchase_id}] Purchase marked as failed`);
+      // TEMPORARILY DISABLED FOR DEBUGGING TO ALLOW RETRIES
+      // await prisma.purchaseRequest.update({
+      //   where: { id: purchase_id },
+      //   data: {
+      //     status: 'failed',
+      //   },
+      // });
+      logger.warn(`[purchase:${purchase_id}] Purchase marked as failed (SKIPPED FOR DEBUGGING)`);
     } catch (updateError) {
       logger.error('Failed to update purchase status to failed', { error: updateError });
     }

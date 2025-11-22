@@ -38,6 +38,7 @@ interface PurchaseData {
   price: number;
   buyerPublicKey: string;
   dataHash: string;
+  purchaseId?: string;
 }
 
 interface KioskData {
@@ -213,7 +214,7 @@ export class BlockchainService {
   ): Transaction {
     try {
       const tx = new Transaction();
-      const purchaseId = randomUUID();
+      const purchaseId = purchaseData.purchaseId || randomUUID();
 
       // Create purchase object
       const [purchaseRequest, purchaseOwnerCap] = tx.moveCall({
@@ -229,8 +230,13 @@ export class BlockchainService {
         ],
       });
 
-      // Transfer PurchaseRequest to seller so they can see it
-      tx.transferObjects([purchaseRequest], tx.pure.address(purchaseData.seller));
+      // Share PurchaseRequest so it can be accessed by seller and mutated by backend
+      // Use public_share_object because PurchaseRequest has 'store' ability and we are outside the module
+      tx.moveCall({
+        target: '0x2::transfer::public_share_object',
+        arguments: [purchaseRequest],
+        typeArguments: [`${SUI_PACKAGE_ID}::purchase::PurchaseRequest`],
+      });
 
       // Transfer PurchaseOwnerCap to sponsor (backend) so we can manage it
       tx.transferObjects([purchaseOwnerCap], tx.pure.address(sponsor));
@@ -249,11 +255,109 @@ export class BlockchainService {
   }
 
   /**
+   * Get PurchaseRequest Object ID from the custom purchase ID string
+   */
+  static async getPurchaseRequestObjectId(
+    customPurchaseId: string,
+    sellerAddress: string
+  ): Promise<string | null> {
+    try {
+      const client = this.getClient();
+      console.log(`[DEBUG] Looking for PurchaseRequest object with ID ${customPurchaseId} owned by ${sellerAddress}`);
+
+      const objects = await client.getOwnedObjects({
+        owner: sellerAddress,
+        filter: {
+          StructType: `${SUI_PACKAGE_ID}::purchase::PurchaseRequest`,
+        },
+        options: {
+          showContent: true,
+        },
+      });
+
+      if (!objects.data) {
+        console.log('[DEBUG] No PurchaseRequest objects found for seller');
+        return null;
+      }
+
+      console.log(`[DEBUG] Found ${objects.data.length} PurchaseRequest objects`);
+
+      for (const obj of objects.data) {
+        const content = obj.data?.content as any;
+        const purchaseIdField = content?.fields?.purchase_id;
+        console.log(`[DEBUG] Checking object ${obj.data?.objectId}, purchase_id: ${purchaseIdField}`);
+
+        if (purchaseIdField === customPurchaseId) {
+          console.log(`[DEBUG] Found match: ${obj.data?.objectId}`);
+          return obj.data?.objectId || null;
+        }
+      }
+
+      console.log(`[DEBUG] PurchaseRequest object not found for custom ID ${customPurchaseId}`);
+      return null;
+    } catch (error) {
+      console.error('[DEBUG] Failed to get PurchaseRequest object ID', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get PurchaseOwnerCap for a specific purchase
+   */
+  static async getPurchaseOwnerCap(purchaseId: string, owner: string): Promise<string | null> {
+    try {
+      const client = this.getClient();
+
+      logger.info(`Looking for PurchaseOwnerCap for purchase ${purchaseId} owned by ${owner}`);
+
+      // Query owner's objects to find PurchaseOwnerCap
+      const objects = await client.getOwnedObjects({
+        owner,
+        filter: {
+          StructType: `${SUI_PACKAGE_ID}::purchase::PurchaseOwnerCap`,
+        },
+        options: {
+          showContent: true,
+        },
+      });
+
+      if (!objects.data) {
+        logger.warn('No PurchaseOwnerCap objects found for owner');
+        return null;
+      }
+
+      logger.info(`Found ${objects.data.length} PurchaseOwnerCap objects`);
+
+      // Find the cap that matches the purchase ID
+      for (const obj of objects.data) {
+        const content = obj.data?.content as any;
+        const capPurchaseId = content?.fields?.purchase_id;
+
+        logger.info('Checking PurchaseOwnerCap', {
+          objectId: obj.data?.objectId,
+          capPurchaseId
+        });
+
+        if (capPurchaseId === purchaseId) {
+          return obj.data?.objectId || null;
+        }
+      }
+
+      logger.warn(`PurchaseOwnerCap not found for purchase ${purchaseId}`);
+      return null;
+    } catch (error) {
+      logger.error('Failed to get PurchaseOwnerCap', { error, purchaseId, owner });
+      return null;
+    }
+  }
+
+  /**
    * Build PTB for releasing payment to seller after fulfillment
    * Updates purchase status and transfers escrow to seller
    */
   static buildReleasePaymentPTB(
     purchaseId: string,
+    purchaseOwnerCapId: string,
     seller: string,
     sponsor: string
   ): Transaction {
@@ -277,6 +381,7 @@ export class BlockchainService {
         target: `${SUI_PACKAGE_ID}::purchase::complete_purchase`,
         arguments: [
           tx.object(purchaseId),
+          tx.object(purchaseOwnerCapId),
         ],
       });
 
@@ -411,6 +516,7 @@ export class BlockchainService {
             options: {
               showEffects: true,
               showEvents: true,
+              showObjectChanges: true,
             },
           });
 

@@ -89,7 +89,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
 
     // Build and execute PTB transaction for purchase
     let txDigest: string;
-    let purchaseRequestId: string;
+    let purchaseRequestId = randomUUID();
     let escrowId: string;
     const sellerAddress = seller.zkloginAddress || seller.walletAddress;
 
@@ -106,6 +106,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
           price: Math.floor(datapod.priceSui.toNumber() * 1e9),
           buyerPublicKey: buyer_public_key,
           dataHash: datapod.dataHash,
+          purchaseId: purchaseRequestId,
         },
         env.SUI_SPONSOR_ADDRESS,
       );
@@ -114,10 +115,36 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       txDigest = await BlockchainService.executeTransaction(purchaseTx);
 
       // Wait for transaction confirmation
-      await BlockchainService.waitForTransaction(txDigest);
+      const txDetails = await BlockchainService.waitForTransaction(txDigest);
+
+      logger.info('Transaction details received', {
+        digest: txDigest,
+        objectChangesCount: txDetails.objectChanges?.length
+      });
+
+      // Find the PurchaseRequest object ID from transaction effects
+      if (txDetails.objectChanges) {
+        const createdObject = txDetails.objectChanges.find(
+          (change: any) =>
+            change.type === 'created' &&
+            change.objectType.endsWith('::purchase::PurchaseRequest')
+        );
+
+        if (createdObject && 'objectId' in createdObject) {
+          // Use the actual Sui Object ID for the database record
+          // This ensures fulfillment job can find the object and its owner cap
+          purchaseRequestId = createdObject.objectId;
+          logger.info('Found PurchaseRequest Object ID', { objectId: purchaseRequestId });
+        } else {
+          logger.warn('PurchaseRequest object not found in transaction changes', {
+            changes: txDetails.objectChanges.map((c: any) => ({ type: c.type, objectType: c.objectType }))
+          });
+        }
+      } else {
+        logger.warn('No object changes in transaction details');
+      }
 
       // Generate deterministic IDs based on transaction digest
-      purchaseRequestId = `0x${txDigest.slice(2, 66)}`;
       escrowId = `0x${randomUUID().replace(/-/g, '').slice(0, 64)}`;
 
       logger.info('Purchase transaction executed', {

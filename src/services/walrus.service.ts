@@ -19,45 +19,60 @@ interface WalrusBlob {
  * Walrus storage service for encrypted blob storage
  */
 export class WalrusService {
-  private static client: AxiosInstance | null = null;
+  private static publisherClient: AxiosInstance | null = null;
+  private static aggregatorClient: AxiosInstance | null = null;
+
+  private static readonly PUBLISHER_URL = 'https://publisher.walrus-testnet.walrus.space';
+  private static readonly AGGREGATOR_URL = 'https://aggregator.walrus-testnet.walrus.space';
 
   /**
-   * Initialize Walrus client
+   * Initialize Publisher client (for uploads/writes)
    */
-  static initializeWalrusClient(): AxiosInstance {
-    if (this.client) {
-      return this.client;
+  private static getPublisherClient(): AxiosInstance {
+    if (this.publisherClient) {
+      return this.publisherClient;
     }
 
     try {
-      // Use known working Walrus testnet publisher endpoint
-      // The env variable may point to api.testnet.walrus.io which doesn't resolve
-      const baseURL = 'https://publisher.walrus-testnet.walrus.space';
-
-      this.client = axios.create({
-        baseURL,
+      this.publisherClient = axios.create({
+        baseURL: this.PUBLISHER_URL,
         timeout: REQUEST_TIMEOUT,
         headers: {
           'Content-Type': 'application/octet-stream',
         },
       });
 
-      logger.info('Walrus client initialized', { apiUrl: baseURL });
-      return this.client;
+      logger.info('Walrus Publisher client initialized', { apiUrl: this.PUBLISHER_URL });
+      return this.publisherClient;
     } catch (error) {
-      logger.error('Failed to initialize Walrus client', { error });
-      throw new WalrusError('Failed to initialize Walrus client');
+      logger.error('Failed to initialize Walrus Publisher client', { error });
+      throw new WalrusError('Failed to initialize Walrus Publisher client');
     }
   }
 
   /**
-   * Get Walrus client instance
+   * Initialize Aggregator client (for downloads/reads)
    */
-  static getClient(): AxiosInstance {
-    if (!this.client) {
-      return this.initializeWalrusClient();
+  private static getAggregatorClient(): AxiosInstance {
+    if (this.aggregatorClient) {
+      return this.aggregatorClient;
     }
-    return this.client;
+
+    try {
+      this.aggregatorClient = axios.create({
+        baseURL: this.AGGREGATOR_URL,
+        timeout: REQUEST_TIMEOUT,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+        },
+      });
+
+      logger.info('Walrus Aggregator client initialized', { apiUrl: this.AGGREGATOR_URL });
+      return this.aggregatorClient;
+    } catch (error) {
+      logger.error('Failed to initialize Walrus Aggregator client', { error });
+      throw new WalrusError('Failed to initialize Walrus Aggregator client');
+    }
   }
 
   /**
@@ -74,7 +89,7 @@ export class WalrusService {
   ): Promise<WalrusBlob> {
     try {
       const uploadWithRetry = async (): Promise<WalrusBlob> => {
-        const client = this.getClient();
+        const client = this.getPublisherClient();
         const epochs = metadata?.epochs || 5; // Default 5 epochs
 
         // Use PUT /v1/blobs?epochs={EPOCHS} with binary data
@@ -137,12 +152,12 @@ export class WalrusService {
 
   /**
    * Download encrypted blob from Walrus
-   * Uses GET /v1/blobs/{blobId}
+   * Uses GET /v1/blobs/{blobId} via Aggregator
    */
   static async downloadBlob(blobId: string): Promise<Buffer> {
     try {
       const downloadWithRetry = async (): Promise<Buffer> => {
-        const client = this.getClient();
+        const client = this.getAggregatorClient();
 
         logger.debug('Downloading blob from Walrus', { blobId, endpoint: `/v1/blobs/${blobId}` });
 
@@ -178,7 +193,7 @@ export class WalrusService {
    */
   static async getBlobMetadata(blobId: string): Promise<any> {
     try {
-      const client = this.getClient();
+      const client = this.getAggregatorClient();
 
       const response = await client.get(`/blobs/${blobId}/metadata`);
 
@@ -200,7 +215,7 @@ export class WalrusService {
    */
   static async deleteBlob(blobId: string): Promise<void> {
     try {
-      const client = this.getClient();
+      const client = this.getPublisherClient();
 
       await client.delete(`/blobs/${blobId}`);
 
@@ -238,7 +253,7 @@ export class WalrusService {
    */
   static async verifyBlobIntegrity(blobId: string): Promise<boolean> {
     try {
-      const client = this.getClient();
+      const client = this.getAggregatorClient();
 
       const response = await client.head(`/blobs/${blobId}`);
       return response.status === 200;
