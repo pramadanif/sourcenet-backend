@@ -432,11 +432,21 @@ async function updateBlockchain(
       throw new Error(`PurchaseOwnerCap not found for purchase ${purchaseId} (Sui ID: ${suiPurchaseId}) owned by sponsor`);
     }
 
-    // Build PTB transaction for blockchain update
+    // Get escrow object ID from database
+    const escrow = await prisma.escrowTransaction.findUnique({
+      where: { purchaseRequestId: purchaseId }
+    });
+
+    if (!escrow || !escrow.escrowObjectId) {
+      throw new Error(`Escrow not found or missing object ID for purchase ${purchaseId}`);
+    }
+
+    // Build PTB transaction for blockchain update (release payment + complete purchase)
     const tx = BlockchainService.buildReleasePaymentPTB(
+      escrow.escrowObjectId,
       suiPurchaseId,
       purchaseOwnerCapId,
-      buyerAddress,
+      sellerAddress,
       env.SUI_SPONSOR_ADDRESS
     );
 

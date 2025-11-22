@@ -232,19 +232,48 @@ export class BlockchainService {
 
       // Share PurchaseRequest so it can be accessed by seller and mutated by backend
       // Use public_share_object because PurchaseRequest has 'store' ability and we are outside the module
+      const purchaseType = `${SUI_PACKAGE_ID}::purchase::PurchaseRequest`;
       tx.moveCall({
         target: '0x2::transfer::public_share_object',
         arguments: [purchaseRequest],
-        typeArguments: [`${SUI_PACKAGE_ID}::purchase::PurchaseRequest`],
+        typeArguments: [purchaseType],
       });
 
       // Transfer PurchaseOwnerCap to sponsor (backend) so we can manage it
+      // Use transferObjects for capability transfer (not moveCall to public_transfer)
       tx.transferObjects([purchaseOwnerCap], tx.pure.address(sponsor));
 
-      logger.info('Purchase PTB built', {
+      // ===== ESCROW PAYMENT FLOW =====
+      // 1. Split coin from gas budget (sponsor pays upfront, will be reimbursed)
+      const paymentCoin = tx.splitCoins(tx.gas, [tx.pure.u64(purchaseData.price)]);
+
+      // 2. Create escrow with the payment coin
+      const [escrow, escrowOwnerCap] = tx.moveCall({
+        target: `${SUI_PACKAGE_ID}::escrow::create_escrow`,
+        arguments: [
+          tx.pure.string(purchaseId),
+          tx.pure.address(purchaseData.buyer),
+          tx.pure.address(purchaseData.seller),
+          tx.pure.string(purchaseData.dataHash),
+          paymentCoin,
+        ],
+      });
+
+      // 3. IMPORTANT: Shared objects CANNOT contain Balance<T>
+      // Escrow struct has balance: Balance<SUI> which prevents it from being shared
+      // Solution: Transfer escrow to sponsor instead of sharing
+      // Sponsor will own and control the escrow
+      tx.transferObjects([escrow], tx.pure.address(sponsor));
+
+      // 4. Transfer EscrowOwnerCap to sponsor
+      // Both objects now owned by sponsor for full control
+      tx.transferObjects([escrowOwnerCap], tx.pure.address(sponsor));
+
+      logger.info('Purchase PTB built with escrow', {
         purchaseId,
         buyer: purchaseData.buyer,
         seller: purchaseData.seller,
+        amount: purchaseData.price,
       });
 
       return tx;
@@ -353,9 +382,10 @@ export class BlockchainService {
 
   /**
    * Build PTB for completing purchase after fulfillment
-   * Updates purchase status to completed
+   * Releases escrow payment to seller and marks purchase as completed
    */
   static buildReleasePaymentPTB(
+    escrowId: string,
     purchaseId: string,
     purchaseOwnerCapId: string,
     seller: string,
@@ -364,7 +394,17 @@ export class BlockchainService {
     try {
       const tx = new Transaction();
 
-      // Update purchase status to completed
+      // 1. Release escrow payment to seller
+      // Sponsor owns the escrow object, so can directly call release_escrow
+      tx.moveCall({
+        target: `${SUI_PACKAGE_ID}::escrow::release_escrow`,
+        arguments: [
+          tx.object(escrowId),
+          tx.pure.address(seller),
+        ],
+      });
+
+      // 2. Update purchase status to completed
       tx.moveCall({
         target: `${SUI_PACKAGE_ID}::purchase::complete_purchase`,
         arguments: [

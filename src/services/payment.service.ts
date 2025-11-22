@@ -26,6 +26,7 @@ export class PaymentService {
     buyer: string,
     sellerId: string,
     sellerAddress: string,
+    escrowObjectId: string | null = null,
   ): Promise<EscrowDetails> {
     try {
       logger.info('Creating escrow', {
@@ -34,6 +35,7 @@ export class PaymentService {
         buyer,
         sellerId,
         sellerAddress,
+        escrowObjectId,
       });
 
       // Create escrow transaction in database
@@ -44,12 +46,14 @@ export class PaymentService {
           sellerAddress: sellerAddress,
           buyerAddress: buyer,
           amountSui: new Decimal(amount),
+          escrowObjectId: escrowObjectId,
           status: 'holding',
         },
       });
 
       logger.info('Escrow created successfully', {
         escrowId: escrow.id,
+        escrowObjectId: escrow.escrowObjectId,
         status: escrow.status,
       });
 

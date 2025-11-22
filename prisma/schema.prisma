@@ -170,6 +170,7 @@ model EscrowTransaction {
   sellerAddress         String   @map("seller_address")
   buyerAddress          String   @map("buyer_address")
   amountSui             Decimal  @db.Decimal(20, 9) @map("amount_sui")
+  escrowObjectId        String?  @map("escrow_object_id") // Sui escrow object ID
   status                String   @default("holding") @map("status") // holding, released, refunded
   txDigest              String?  @map("tx_digest") // Blockchain transaction
   releasedAt            DateTime? @map("released_at")

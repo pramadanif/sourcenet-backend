@@ -91,6 +91,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
     let txDigest: string;
     let purchaseRequestId = randomUUID();
     let escrowId: string;
+    let escrowObjectId: string | null = null;
     const sellerAddress = seller.zkloginAddress || seller.walletAddress;
 
     try {
@@ -140,6 +141,20 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
             changes: txDetails.objectChanges.map((c: any) => ({ type: c.type, objectType: c.objectType }))
           });
         }
+
+        // Find the Escrow object ID
+        const escrowObject = txDetails.objectChanges.find(
+          (change: any) =>
+            change.type === 'created' &&
+            change.objectType.endsWith('::escrow::Escrow')
+        );
+
+        if (escrowObject && 'objectId' in escrowObject) {
+          escrowObjectId = escrowObject.objectId;
+          logger.info('Found Escrow Object ID', { objectId: escrowObjectId });
+        } else {
+          logger.warn('Escrow object not found in transaction changes');
+        }
       } else {
         logger.warn('No object changes in transaction details');
       }
@@ -152,6 +167,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
         txDigest,
         purchaseRequestId,
         escrowId,
+        escrowObjectId,
       });
     } catch (blockchainError) {
       logger.error('Failed to execute purchase transaction', {
@@ -197,6 +213,7 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
       buyer_address,
       seller.id,
       sellerAddress || '',
+      escrowObjectId, // Sui escrow object ID
     );
 
     // Store transaction audit
