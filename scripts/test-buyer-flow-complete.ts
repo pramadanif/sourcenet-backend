@@ -72,7 +72,9 @@ async function createTestDataPod() {
         console.log('✅ DataPod published:', publishResponse.data.datapod_id);
 
         // Clean up temp file
-        fs.unlinkSync(tempFile);
+        if (fs.existsSync(tempFile)) {
+            fs.unlinkSync(tempFile);
+        }
 
         return publishResponse.data.datapod_id;
 

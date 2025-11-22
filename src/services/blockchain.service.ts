@@ -352,8 +352,8 @@ export class BlockchainService {
   }
 
   /**
-   * Build PTB for releasing payment to seller after fulfillment
-   * Updates purchase status and transfers escrow to seller
+   * Build PTB for completing purchase after fulfillment
+   * Updates purchase status to completed
    */
   static buildReleasePaymentPTB(
     purchaseId: string,
@@ -363,18 +363,6 @@ export class BlockchainService {
   ): Transaction {
     try {
       const tx = new Transaction();
-
-      // Release escrow - move call to get the coin from escrow
-      const releasedCoin = tx.moveCall({
-        target: `${SUI_PACKAGE_ID}::escrow::release_escrow`,
-        arguments: [
-          tx.object(purchaseId),
-          tx.object(CLOCK_ID),
-        ],
-      });
-
-      // Transfer coin to seller
-      tx.transferObjects([releasedCoin], tx.pure.address(seller));
 
       // Update purchase status to completed
       tx.moveCall({
