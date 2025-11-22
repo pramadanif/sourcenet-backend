@@ -27,11 +27,11 @@ router.get('/purchase/:purchase_id', asyncHandler(getPurchaseStatus));
 // GET /api/buyer/purchase/:purchase_id/details - Get full purchase details
 router.get('/purchase/:purchase_id/details', asyncHandler(getPurchaseDetails));
 
-// GET /api/download/:purchase_id - Get download URL with rate limiting
-router.get('/download/:purchase_id', asyncHandler(getDownloadUrl));
+// GET /api/buyer/purchase/:purchase_id/download-url - Get download URL
+router.get('/purchase/:purchase_id/download-url', asyncHandler(getDownloadUrl));
 
-// POST /api/download/:purchase_id - Download data (legacy endpoint)
-router.post('/download/:purchase_id', asyncHandler(downloadData));
+// GET /api/buyer/download/:purchase_id - Download data
+router.get('/download/:purchase_id', asyncHandler(downloadData));
 
 // POST /api/buyer/purchase/:purchase_id/review - Submit review
 router.post('/purchase/:purchase_id/review', asyncHandler(submitReview));

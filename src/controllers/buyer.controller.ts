@@ -1,3 +1,4 @@
+
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -10,6 +11,7 @@ import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
 import { randomUUID } from 'crypto';
 import { queueFulfillmentJob } from '@/jobs/fulfillment.job';
+import { WalrusService } from '@/services/walrus.service';
 
 const prisma = new PrismaClient();
 
@@ -207,7 +209,7 @@ export const executePurchase = async (req: Request, res: Response): Promise<void
     // 3. Get DataPod details from the purchase request ID (passed in body is UUID, on-chain is object ID)
     // We need to find which datapod was purchased.
     // In a real implementation, we might parse the transaction inputs or events.
-    // For now, let's assume the frontend passes the datapod_id too, or we look it up.
+    // For the purpose of this flow, we assume the frontend passes the datapod_id too, or we look it up.
     // Let's require datapod_id in body for simplicity
     const { datapod_id } = req.body;
     if (!datapod_id) throw new ValidationError('Missing datapod_id');
@@ -709,9 +711,112 @@ export const createPurchase = async (req: Request, res: Response): Promise<void>
 };
 
 export const getDownloadUrl = async (req: Request, res: Response): Promise<void> => {
-  throw new ValidationError('Not implemented yet');
+  try {
+    const { purchase_id } = req.params;
+    const buyerAddress = req.user!.address;
+
+    if (!purchase_id) {
+      throw new ValidationError('Missing purchase_id');
+    }
+
+    // 1. Verify Purchase
+    const purchase = await prisma.purchaseRequest.findUnique({
+      where: { purchaseRequestId: purchase_id },
+      include: { datapod: true },
+    });
+
+    if (!purchase) {
+      throw new NotFoundError('Purchase not found');
+    }
+
+    if (purchase.buyerAddress !== buyerAddress) {
+      throw new ValidationError('Unauthorized: buyer does not own this purchase');
+    }
+
+    if (purchase.status !== 'completed') {
+      throw new ValidationError('Purchase not completed');
+    }
+
+    if (!purchase.encryptedBlobId) {
+      throw new NotFoundError('Encrypted data not found for this purchase');
+    }
+
+    // 2. Generate URLs
+    const directUrl = WalrusService.getBlobUrl(purchase.encryptedBlobId);
+    const proxyUrl = `${env.API_BASE_URL}/buyer/download/${purchase_id}`;
+
+    logger.info('Generated download URLs', {
+      requestId: req.requestId,
+      purchaseId: purchase_id,
+      blobId: purchase.encryptedBlobId
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        direct_url: directUrl,
+        proxy_url: proxyUrl,
+        blob_id: purchase.encryptedBlobId,
+        decryption_key: purchase.decryptionKey,
+        expires_at: new Date(Date.now() + 3600 * 1000).toISOString(), // 1 hour validity (mock)
+      },
+    });
+
+  } catch (error) {
+    logger.error('Get download URL failed', { error, requestId: req.requestId });
+    throw error;
+  }
 };
 
 export const downloadData = async (req: Request, res: Response): Promise<void> => {
-  throw new ValidationError('Not implemented yet');
+  try {
+    const { purchase_id } = req.params;
+    const buyerAddress = req.user!.address;
+
+    if (!purchase_id) {
+      throw new ValidationError('Missing purchase_id');
+    }
+
+    // 1. Verify Purchase
+    const purchase = await prisma.purchaseRequest.findUnique({
+      where: { purchaseRequestId: purchase_id },
+      include: { datapod: true },
+    });
+
+    if (!purchase) {
+      throw new NotFoundError('Purchase not found');
+    }
+
+    if (purchase.buyerAddress !== buyerAddress) {
+      throw new ValidationError('Unauthorized: buyer does not own this purchase');
+    }
+
+    if (purchase.status !== 'completed') {
+      throw new ValidationError('Purchase not completed');
+    }
+
+    if (!purchase.encryptedBlobId) {
+      throw new NotFoundError('Encrypted data not found for this purchase');
+    }
+
+    // 2. Fetch Blob from Walrus
+    logger.info('Proxying download from Walrus', {
+      requestId: req.requestId,
+      purchaseId: purchase_id,
+      blobId: purchase.encryptedBlobId
+    });
+
+    const buffer = await WalrusService.getBlob(purchase.encryptedBlobId);
+
+    // 3. Stream to Client
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${purchase.datapod.title}.enc"`);
+    res.setHeader('Content-Length', buffer.length);
+
+    res.send(buffer);
+
+  } catch (error) {
+    logger.error('Download data failed', { error, requestId: req.requestId });
+    throw error;
+  }
 };

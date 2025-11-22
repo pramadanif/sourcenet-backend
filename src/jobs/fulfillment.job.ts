@@ -487,7 +487,7 @@ async function updateDatabase(
   purchaseId: string,
   datapodId: string,
   encryptedBlobId: string,
-  encryptedEphemeralKey: string,
+  encryptedPayload: EncryptedBlobPayload,
   txDigest: string,
   buyerAddress: string,
 ): Promise<void> {
@@ -500,7 +500,11 @@ async function updateDatabase(
           where: { id: purchaseId },
           data: {
             encryptedBlobId,
-            decryptionKey: encryptedEphemeralKey,
+            decryptionKey: JSON.stringify({
+              encryptedEphemeralKey: encryptedPayload.encryptedEphemeralKey,
+              nonce: encryptedPayload.nonce,
+              tag: encryptedPayload.tag
+            }),
             status: 'completed',
             txDigest,
             completedAt: new Date(),
@@ -758,7 +762,7 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
       purchase_id,
       purchaseRequest.datapodId,
       encryptedBlobId,
-      encryptedPayload.encryptedEphemeralKey,
+      encryptedPayload,
       txDigest,
       buyer_address,
     );

@@ -284,4 +284,10 @@ export class WalrusService {
       throw new WalrusError('Failed to batch upload blobs to Walrus');
     }
   }
+  /**
+   * Get public URL for a blob
+   */
+  static getBlobUrl(blobId: string): string {
+    return `${this.AGGREGATOR_URL}/v1/blobs/${blobId}`;
+  }
 }
