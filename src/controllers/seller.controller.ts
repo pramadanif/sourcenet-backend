@@ -262,12 +262,13 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
         datapodId,
         kioskId,
       });
-    } catch (blockchainError) {
+    } catch (blockchainError: any) {
       logger.error('Failed to publish DataPod on blockchain', {
         error: blockchainError,
         requestId: req.requestId,
       });
-      throw new BlockchainError('Failed to publish DataPod on blockchain');
+      // Return detailed error for debugging
+      throw new BlockchainError(`Failed to publish DataPod on blockchain: ${blockchainError.message || blockchainError}`);
     }
 
     // Create DataPod record with blockchain transaction digest

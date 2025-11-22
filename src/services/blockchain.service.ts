@@ -11,8 +11,8 @@ import { env } from '@/config/env';
 import { BlockchainError } from '@/types/errors.types';
 import { retry } from '@/utils/helpers';
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000;
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 2000;
 const TX_TIMEOUT = 120000; // 120 seconds
 
 // Sui package IDs and addresses
@@ -424,99 +424,120 @@ export class BlockchainService {
    * Execute a transaction block with sponsor signature
    */
   static async executeTransaction(transaction: Transaction): Promise<string> {
-    try {
-      const client = this.getClient();
-      const sponsorPrivateKey = env.SUI_SPONSOR_PRIVATE_KEY;
+    let lastError: any;
 
-      let privateKeyBytes: Uint8Array;
-
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        // Try to decode as standard Sui private key (suiprivkey...)
-        const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
-        privateKeyBytes = decoded.secretKey;
-      } catch (e) {
-        // Fallback: try as raw base64 (legacy)
+        const client = this.getClient();
+        const sponsorPrivateKey = env.SUI_SPONSOR_PRIVATE_KEY;
+
+        let privateKeyBytes: Uint8Array;
+
         try {
-          privateKeyBytes = new Uint8Array(Buffer.from(sponsorPrivateKey, 'base64'));
-        } catch (err) {
-          throw new Error('Invalid private key format');
+          // Try to decode as standard Sui private key (suiprivkey...)
+          const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
+          privateKeyBytes = decoded.secretKey;
+        } catch (e) {
+          // Fallback: try as raw base64 (legacy)
+          try {
+            privateKeyBytes = new Uint8Array(Buffer.from(sponsorPrivateKey, 'base64'));
+          } catch (err) {
+            throw new Error('Invalid private key format');
+          }
         }
-      }
 
-      if (privateKeyBytes.length !== 32) {
-        if (privateKeyBytes.length === 64) {
-          privateKeyBytes = privateKeyBytes.slice(0, 32);
-        } else {
-          throw new Error(`Invalid private key length: expected 32 bytes, got ${privateKeyBytes.length}`);
+        if (privateKeyBytes.length !== 32) {
+          if (privateKeyBytes.length === 64) {
+            privateKeyBytes = privateKeyBytes.slice(0, 32);
+          } else {
+            throw new Error(`Invalid private key length: expected 32 bytes, got ${privateKeyBytes.length}`);
+          }
         }
-      }
 
-      let keypair;
-      try {
-        const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
-        if (decoded.schema === 'ED25519') {
-          keypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
-        } else if (decoded.schema === 'Secp256k1') {
-          keypair = Secp256k1Keypair.fromSecretKey(decoded.secretKey);
-        } else if (decoded.schema === 'Secp256r1') {
-          keypair = Secp256r1Keypair.fromSecretKey(decoded.secretKey);
-        } else {
-          throw new Error(`Unsupported key schema: ${decoded.schema}`);
+        let keypair;
+        try {
+          const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
+          if (decoded.schema === 'ED25519') {
+            keypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
+          } else if (decoded.schema === 'Secp256k1') {
+            keypair = Secp256k1Keypair.fromSecretKey(decoded.secretKey);
+          } else if (decoded.schema === 'Secp256r1') {
+            keypair = Secp256r1Keypair.fromSecretKey(decoded.secretKey);
+          } else {
+            throw new Error(`Unsupported key schema: ${decoded.schema}`);
+          }
+        } catch (e) {
+          keypair = Secp256k1Keypair.fromSecretKey(privateKeyBytes);
         }
-      } catch (e) {
-        keypair = Secp256k1Keypair.fromSecretKey(privateKeyBytes);
+
+        // Set sender to sponsor address
+        transaction.setSender(keypair.toSuiAddress());
+
+        // Set gas budget (standard amount, can be adjusted)
+        transaction.setGasBudget(100000000); // 0.1 SUI
+
+        // Build the transaction bytes
+        const bytes = await transaction.build({ client });
+
+        // Sign the transaction
+        const signedTransaction = await keypair.signTransaction(bytes);
+
+        // Execute the signed transaction
+        const result = await client.executeTransactionBlock({
+          transactionBlock: bytes,
+          signature: signedTransaction.signature,
+          options: {
+            showEffects: true,
+            showEvents: true,
+          },
+        });
+
+        logger.info('Sponsored transaction executed', {
+          digest: result.digest,
+          status: result.effects?.status.status,
+        });
+
+        if (result.effects?.status.status === 'failure') {
+          throw new Error(`Transaction failed on-chain: ${result.effects.status.error}`);
+        }
+
+        return result.digest;
+      } catch (error: any) {
+        lastError = error;
+        const errorMsg = error.message || String(error);
+
+        // Retry on network errors or 504/502/500
+        if (attempt < MAX_RETRIES && (
+          errorMsg.includes('504') ||
+          errorMsg.includes('502') ||
+          errorMsg.includes('500') ||
+          errorMsg.includes('fetch failed') ||
+          errorMsg.includes('socket hang up')
+        )) {
+          logger.warn(`Transaction execution failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`, { error: errorMsg });
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+          continue;
+        }
+
+        // Enhanced error logging for final failure
+        const errorDetails = error instanceof Error ? error.message : String(error);
+        const errorObj = typeof error === 'object' ? JSON.stringify(error, null, 2) : String(error);
+
+        console.error('----------------------------------------');
+        console.error('BLOCKCHAIN TRANSACTION ERROR:');
+        console.error(errorDetails);
+        console.error('FULL ERROR OBJECT:');
+        console.error(errorObj);
+        console.error('----------------------------------------');
+
+        logger.error('Transaction execution failed', {
+          error: errorDetails,
+          fullError: errorObj,
+        });
+        throw new BlockchainError(`Transaction execution failed: ${errorDetails}`);
       }
-
-      // Set sender to sponsor address
-      transaction.setSender(keypair.toSuiAddress());
-
-      // Set gas budget (standard amount, can be adjusted)
-      transaction.setGasBudget(100000000); // 0.1 SUI
-
-      // Build the transaction bytes
-      const bytes = await transaction.build({ client });
-
-      // Sign the transaction
-      const signedTransaction = await keypair.signTransaction(bytes);
-
-      // Execute the signed transaction
-      const result = await client.executeTransactionBlock({
-        transactionBlock: bytes,
-        signature: signedTransaction.signature,
-        options: {
-          showEffects: true,
-          showEvents: true,
-        },
-      });
-
-      logger.info('Sponsored transaction executed', {
-        digest: result.digest,
-        status: result.effects?.status.status,
-      });
-
-      if (result.effects?.status.status === 'failure') {
-        throw new Error(`Transaction failed on-chain: ${result.effects.status.error}`);
-      }
-
-      return result.digest;
-    } catch (error) {
-      // Enhanced error logging
-      const errorDetails = error instanceof Error ? error.message : String(error);
-      const errorObj = typeof error === 'object' ? JSON.stringify(error, null, 2) : String(error);
-
-      console.error('----------------------------------------');
-      console.error('BLOCKCHAIN TRANSACTION ERROR:');
-      console.error(errorDetails);
-      console.error('FULL ERROR OBJECT:');
-      console.error(errorObj);
-      console.error('----------------------------------------');
-
-      logger.error('Transaction execution failed', {
-        error: errorDetails,
-        fullError: errorObj,
-      });
-      throw new BlockchainError(`Transaction execution failed: ${errorDetails}`);
     }
+    throw lastError;
   }
 
   /**
@@ -545,6 +566,8 @@ export class BlockchainService {
               showEffects: true,
               showEvents: true,
               showObjectChanges: true,
+              showInput: true,
+              showBalanceChanges: true, // Added this option
             },
           });
 
@@ -684,36 +707,89 @@ export class BlockchainService {
   }
 
   /**
-   * Query DataPod purchases events to track fulfillment
+   * Verify a payment transaction from buyer to sponsor
    */
-  static async queryPurchaseEvents(
-    eventType: string = 'PurchaseCreated',
-    limit: number = 50
-  ): Promise<any[]> {
+  static async verifyPaymentTransaction(
+    digest: string,
+    expectedAmount: number,
+    expectedSender: string,
+    expectedRecipient: string
+  ): Promise<boolean> {
     try {
-      const fullEventType = `${SUI_PACKAGE_ID}::purchase::${eventType}`;
-      return await this.queryEvents(fullEventType, limit);
-    } catch (error) {
-      logger.error('Failed to query purchase events', { error });
-      throw new BlockchainError('Failed to query purchase events');
-    }
-  }
+      logger.info('Verifying payment transaction', {
+        digest,
+        expectedAmount,
+        expectedSender,
+        expectedRecipient
+      });
 
-  /**
-   * Batch execute multiple transactions with retry logic
-   */
-  static async executeTransactionWithRetry(
-    transaction: Transaction,
-    maxRetries: number = MAX_RETRIES
-  ): Promise<string> {
-    return retry(
-      async () => {
-        const digest = await this.executeTransaction(transaction);
-        await this.waitForTransaction(digest);
-        return digest;
-      },
-      maxRetries,
-      RETRY_DELAY
-    );
+      const tx = await this.waitForTransaction(digest);
+
+      if (tx.effects?.status.status !== 'success') {
+        logger.warn('Payment transaction failed on-chain', { digest });
+        throw new Error(`Transaction status is ${tx.effects?.status.status}`);
+      }
+
+      // Verify sender
+      const sender = tx.transaction?.data?.sender;
+      if (!sender) {
+        throw new Error('Transaction sender not found (missing showInput?)');
+      }
+
+      if (sender !== expectedSender) {
+        logger.warn('Payment sender mismatch', { expected: expectedSender, actual: sender });
+        throw new Error(`Sender mismatch: expected ${expectedSender}, got ${sender}`);
+      }
+
+      // Verify balance changes
+      const balanceChanges = tx.balanceChanges || [];
+      logger.info('Checking balance changes', { count: balanceChanges.length, expectedRecipient });
+
+      const paymentReceived = balanceChanges.find((change: any) => {
+        const ownerAddress = change.owner?.AddressOwner || change.owner; // Handle potential structure variations
+        const isRecipient = ownerAddress === expectedRecipient;
+        const isSui = change.coinType === '0x2::sui::SUI';
+        const amount = BigInt(change.amount);
+
+        logger.info('Checking balance change', {
+          ownerAddress,
+          expectedRecipient,
+          isRecipient,
+          coinType: change.coinType,
+          isSui,
+          amount: amount.toString()
+        });
+
+        return isRecipient && isSui && amount > 0n;
+      });
+
+      if (!paymentReceived) {
+        const changesStr = JSON.stringify(balanceChanges, null, 2);
+        logger.warn('No payment to recipient found', { digest, expectedRecipient, balanceChanges });
+        throw new Error(`No payment found for recipient ${expectedRecipient}. Changes: ${changesStr}`);
+      }
+
+      const receivedAmount = BigInt(paymentReceived.amount);
+      const expectedBigInt = BigInt(expectedAmount);
+
+      if (receivedAmount < expectedBigInt) {
+        logger.warn('Insufficient payment amount', {
+          digest,
+          expected: expectedBigInt.toString(),
+          received: receivedAmount.toString()
+        });
+        throw new Error(`Insufficient amount: expected ${expectedBigInt}, got ${receivedAmount}`);
+      }
+
+      logger.info('Payment transaction verified successfully', {
+        digest,
+        amount: receivedAmount.toString()
+      });
+
+      return true;
+    } catch (error: any) {
+      logger.error('Failed to verify payment transaction', { error: error.message, digest });
+      throw error; // Re-throw to be caught by controller
+    }
   }
 }

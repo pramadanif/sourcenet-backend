@@ -131,3 +131,10 @@ export class S3Error extends AppError {
     Object.setPrototypeOf(this, S3Error.prototype);
   }
 }
+
+export class NotFoundError extends AppError {
+  constructor(message: string, details: ErrorDetails = {}, requestId?: string) {
+    super(message, ErrorCode.RECORD_NOT_FOUND, 404, details, requestId);
+    Object.setPrototypeOf(this, NotFoundError.prototype);
+  }
+}
