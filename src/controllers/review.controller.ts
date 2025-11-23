@@ -10,10 +10,9 @@ const prisma = new PrismaClient();
  */
 export async function createReview(req: Request, res: Response): Promise<void> {
   try {
-    const userId = (req as any).userId;
-    const { purchaseRequestId, datapodId, rating, comment } = req.body;
+    const userAddress = req.user?.address;
 
-    if (!userId) {
+    if (!userAddress) {
       res.status(401).json({
         error: {
           code: 'UNAUTHORIZED',
@@ -22,6 +21,29 @@ export async function createReview(req: Request, res: Response): Promise<void> {
       });
       return;
     }
+
+    // Find user by address
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: userAddress },
+          { walletAddress: userAddress },
+        ],
+      },
+    });
+
+    if (!user) {
+      res.status(401).json({
+        error: {
+          code: 'USER_NOT_FOUND',
+          message: 'User not found',
+        },
+      });
+      return;
+    }
+
+    const userId = user.id;
+    const { purchaseRequestId, datapodId, rating, comment } = req.body;
 
     // Validate rating
     if (!rating || rating < 1 || rating > 5) {
@@ -86,7 +108,7 @@ export async function createReview(req: Request, res: Response): Promise<void> {
       },
       create: {
         datapodId: purchase.datapodId,
-        purchaseRequestId,
+        purchaseRequestId: purchase.id, // Use UUID from database, not on-chain ID
         buyerId: userId,
         buyerAddress: purchase.buyerAddress,
         rating,
@@ -136,8 +158,30 @@ export async function getDataPodReviews(req: Request, res: Response): Promise<vo
     const { datapodId } = req.params;
     const { limit = 10, offset = 0 } = req.query;
 
+    let targetDatapodId = datapodId;
+
+    // If datapodId is an on-chain ID (starts with 0x), resolve it to UUID
+    if (datapodId.startsWith('0x')) {
+      const datapod = await prisma.dataPod.findUnique({
+        where: { datapodId: datapodId },
+        select: { id: true },
+      });
+
+      if (!datapod) {
+        res.status(404).json({
+          error: {
+            code: 'DATAPOD_NOT_FOUND',
+            message: 'DataPod not found',
+          },
+        });
+        return;
+      }
+
+      targetDatapodId = datapod.id;
+    }
+
     const reviews = await prisma.review.findMany({
-      where: { datapodId },
+      where: { datapodId: targetDatapodId },
       orderBy: { createdAt: 'desc' },
       take: parseInt(limit as string),
       skip: parseInt(offset as string),
@@ -153,7 +197,7 @@ export async function getDataPodReviews(req: Request, res: Response): Promise<vo
     });
 
     const total = await prisma.review.count({
-      where: { datapodId },
+      where: { datapodId: targetDatapodId },
     });
 
     res.status(200).json({
@@ -184,10 +228,10 @@ export async function getDataPodReviews(req: Request, res: Response): Promise<vo
  */
 export async function getUserReviews(req: Request, res: Response): Promise<void> {
   try {
-    const userId = (req as any).userId;
+    const userAddress = req.user?.address;
     const { limit = 10, offset = 0 } = req.query;
 
-    if (!userId) {
+    if (!userAddress) {
       res.status(401).json({
         error: {
           code: 'UNAUTHORIZED',
@@ -196,6 +240,28 @@ export async function getUserReviews(req: Request, res: Response): Promise<void>
       });
       return;
     }
+
+    // Find user by address
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: userAddress },
+          { walletAddress: userAddress },
+        ],
+      },
+    });
+
+    if (!user) {
+      res.status(401).json({
+        error: {
+          code: 'USER_NOT_FOUND',
+          message: 'User not found',
+        },
+      });
+      return;
+    }
+
+    const userId = user.id;
 
     const reviews = await prisma.review.findMany({
       where: { buyerId: userId },
@@ -246,10 +312,10 @@ export async function getUserReviews(req: Request, res: Response): Promise<void>
  */
 export async function deleteReview(req: Request, res: Response): Promise<void> {
   try {
-    const userId = (req as any).userId;
+    const userAddress = req.user?.address;
     const { reviewId } = req.params;
 
-    if (!userId) {
+    if (!userAddress) {
       res.status(401).json({
         error: {
           code: 'UNAUTHORIZED',
@@ -258,6 +324,28 @@ export async function deleteReview(req: Request, res: Response): Promise<void> {
       });
       return;
     }
+
+    // Find user by address
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: userAddress },
+          { walletAddress: userAddress },
+        ],
+      },
+    });
+
+    if (!user) {
+      res.status(401).json({
+        error: {
+          code: 'USER_NOT_FOUND',
+          message: 'User not found',
+        },
+      });
+      return;
+    }
+
+    const userId = user.id;
 
     // Find review
     const review = await prisma.review.findUnique({

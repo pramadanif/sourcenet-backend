@@ -1,0 +1,36 @@
+// QUICK FIX FOR SECP256K1 SUPPORT
+// Replace lines 1-3 in blockchain.service.ts with:
+import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+import { Transaction } from '@mysten/sui/transactions';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { Secp256k1Keypair } from '@mysten/sui/keypairs/secp256k1';
+import { Secp256r1Keypair } from '@mysten/sui/keypairs/secp256r1';
+
+// Replace lines 314-319 (the keypair creation in executeTransaction) with:
+if (sponsor) {
+  const sponsorPrivateKey = env.SUI_SPONSOR_PRIVATE_KEY;
+  let keypair: Ed25519Keypair | Secp256k1Keypair | Secp256r1Keypair;
+
+  try {
+    if (sponsorPrivateKey.startsWith('suiprivkey')) {
+      const { schema, secretKey } = decodeSuiPrivateKey(sponsorPrivateKey);
+      if (schema === 'ED25519') {
+        keypair = Ed25519Keypair.fromSecretKey(secretKey);
+      } else if (schema === 'Secp256k1') {
+        keypair = Secp256k1Keypair.fromSecretKey(secretKey);
+      } else if (schema === 'Secp256r1') {
+        keypair = Secp256r1Keypair.fromSecretKey(secretKey);
+      } else {
+        throw new Error(`Unsupported key schema: ${schema}`);
+      }
+    } else {
+      // Fallback for base64/hex (assume Ed25519)
+      const secretKey = Buffer.from(sponsorPrivateKey, 'base64');
+      keypair = Ed25519Keypair.fromSecretKey(secretKey);
+    }
+  } catch (keyError) {
+    logger.error('Failed to parse sponsor private key', { error: keyError });
+    throw new Error('Invalid sponsor private key format');
+  }
+}

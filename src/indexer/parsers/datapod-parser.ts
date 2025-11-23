@@ -13,8 +13,8 @@ const DataPodPublishedSchema = z.object({
     }
     return BigInt(v);
   }),
-  data_hash: z.string(),
-  kiosk_id: z.string().optional(),
+  data_hash: z.string().optional(),
+  kiosk_id: z.string().optional().transform((v) => v || ''),
 });
 
 export type DataPodPublishedEvent = z.infer<typeof DataPodPublishedSchema>;
@@ -42,7 +42,7 @@ export function parseDataPodPublished(eventData: any): ParsedDataPodEvent | null
       title: validated.title,
       category: validated.category,
       price_sui: validated.price.toString(),
-      data_hash: validated.data_hash,
+      data_hash: validated.data_hash || '',
       kiosk_id: validated.kiosk_id || null,
     };
   } catch (error) {

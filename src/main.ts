@@ -26,6 +26,7 @@ app.use(helmet());
 app.use(cors({
   origin: env.CORS_ORIGINS.split(','),
   credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-Request-ID'],
 }));
 app.use(morgan('combined', { stream: { write: (msg: string) => logger.info(msg.trim()) } }));
 app.use(express.json({ limit: '10mb' }));

@@ -1,15 +1,19 @@
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { Secp256k1Keypair } from '@mysten/sui/keypairs/secp256k1';
+import { Secp256r1Keypair } from '@mysten/sui/keypairs/secp256r1';
 import { sign as naclSign } from 'tweetnacl';
+import { randomUUID } from 'crypto';
 import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
 import { BlockchainError } from '@/types/errors.types';
 import { retry } from '@/utils/helpers';
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000;
-const TX_TIMEOUT = 60000; // 60 seconds
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 2000;
+const TX_TIMEOUT = 120000; // 120 seconds
 
 // Sui package IDs and addresses
 const SUI_PACKAGE_ID = env.SOURCENET_PACKAGE_ID;
@@ -19,7 +23,8 @@ const CLOCK_ID = '0x6';
 interface DataPodMetadata {
   title: string;
   category: string;
-  price: number;
+  description: string;
+  price: bigint;
   dataHash: string;
   blobId: string;
   uploadId: string;
@@ -33,6 +38,7 @@ interface PurchaseData {
   price: number;
   buyerPublicKey: string;
   dataHash: string;
+  purchaseId?: string;
 }
 
 interface KioskData {
@@ -116,7 +122,7 @@ export class BlockchainService {
    * Get or create seller's Kiosk
    * Returns Kiosk ID and OwnerCap from on-chain state
    */
-  static async getOrCreateSellerKiosk(seller: string): Promise<KioskData> {
+  static async getOrCreateSellerKiosk(seller: string): Promise<KioskData | null> {
     try {
       const client = this.getClient();
 
@@ -151,12 +157,11 @@ export class BlockchainService {
         }
       }
 
-      // Kiosk not found, would need to create via transaction
-      // For now, throw error - caller should handle kiosk creation
-      throw new Error('No existing Kiosk found for seller');
+      // Kiosk not found
+      return null;
     } catch (error) {
       logger.error('Failed to get seller Kiosk', { error, seller });
-      throw new BlockchainError('Failed to retrieve seller Kiosk');
+      return null;
     }
   }
 
@@ -167,37 +172,24 @@ export class BlockchainService {
   static buildPublishPTB(
     datapodMetadata: DataPodMetadata,
     sponsor: string,
-    kioskData: KioskData
+    kioskData: KioskData | null
   ): Transaction {
     try {
       const tx = new Transaction();
 
-      // Note: setSponsor is not available in current Sui SDK
-
-      const { kioskId, kioskOwnerCap } = kioskData;
-
-      // Move call to mint DataPod NFT
-      const datapodTxResult = tx.moveCall({
+      // --- 1. CREATE DATAPOD ---
+      // Call create_datapod - objects are transferred within Move function
+      // Do NOT capture return values as they're already transferred
+      tx.moveCall({
         target: `${SUI_PACKAGE_ID}::datapod::create_datapod`,
         arguments: [
+          tx.pure.string(datapodMetadata.blobId),
           tx.pure.string(datapodMetadata.title),
           tx.pure.string(datapodMetadata.category),
+          tx.pure.string(datapodMetadata.description),
           tx.pure.u64(datapodMetadata.price),
           tx.pure.string(datapodMetadata.dataHash),
-          tx.pure.string(datapodMetadata.blobId),
           tx.pure.string(datapodMetadata.uploadId),
-          tx.pure.address(datapodMetadata.sellerAddress),
-        ],
-      });
-
-      // List DataPod in Kiosk
-      tx.moveCall({
-        target: `${KIOSK_PACKAGE_ID}::kiosk::list`,
-        arguments: [
-          tx.object(kioskId),
-          tx.object(kioskOwnerCap),
-          datapodTxResult,
-          tx.pure.u64(datapodMetadata.price),
         ],
       });
 
@@ -214,8 +206,7 @@ export class BlockchainService {
   }
 
   /**
-   * Build PTB for purchasing DataPod
-   * Creates PurchaseRequest and Escrow atomically with sponsored gas
+   * Build PTB for creating a purchase request
    */
   static buildPurchasePTB(
     purchaseData: PurchaseData,
@@ -223,17 +214,10 @@ export class BlockchainService {
   ): Transaction {
     try {
       const tx = new Transaction();
+      const purchaseId = purchaseData.purchaseId || randomUUID();
 
-      // Note: setSponsor is not available in current Sui SDK
-      // Sponsor setup should be handled at transaction execution level
-
-      // Split coins for payment (assumes buyer has SUI)
-      const coinInputs = tx.splitCoins(tx.gas, [tx.pure.u64(purchaseData.price)]);
-
-      // Create PurchaseRequest with all required parameters
-      // Matches contract signature: create_purchase(purchase_id, datapod_id, buyer, seller, buyer_public_key, price_sui, data_hash, ctx)
-      const purchaseId = `0x${Buffer.from(Date.now().toString()).toString('hex').padStart(64, '0')}`;
-      const purchaseRequest = tx.moveCall({
+      // Create purchase object
+      const [purchaseRequest, purchaseOwnerCap] = tx.moveCall({
         target: `${SUI_PACKAGE_ID}::purchase::create_purchase`,
         arguments: [
           tx.pure.string(purchaseId),
@@ -246,24 +230,50 @@ export class BlockchainService {
         ],
       });
 
-      // Create Escrow with all required parameters
-      // Matches contract signature: create_escrow(purchase_id, buyer, seller, data_hash, coin, ctx)
+      // Share PurchaseRequest so it can be accessed by seller and mutated by backend
+      // Use public_share_object because PurchaseRequest has 'store' ability and we are outside the module
+      const purchaseType = `${SUI_PACKAGE_ID}::purchase::PurchaseRequest`;
       tx.moveCall({
+        target: '0x2::transfer::public_share_object',
+        arguments: [purchaseRequest],
+        typeArguments: [purchaseType],
+      });
+
+      // Transfer PurchaseOwnerCap to sponsor (backend) so we can manage it
+      // Use transferObjects for capability transfer (not moveCall to public_transfer)
+      tx.transferObjects([purchaseOwnerCap], tx.pure.address(sponsor));
+
+      // ===== ESCROW PAYMENT FLOW =====
+      // 1. Split coin from gas budget (sponsor pays upfront, will be reimbursed)
+      const paymentCoin = tx.splitCoins(tx.gas, [tx.pure.u64(purchaseData.price)]);
+
+      // 2. Create escrow with the payment coin
+      const [escrow, escrowOwnerCap] = tx.moveCall({
         target: `${SUI_PACKAGE_ID}::escrow::create_escrow`,
         arguments: [
           tx.pure.string(purchaseId),
           tx.pure.address(purchaseData.buyer),
           tx.pure.address(purchaseData.seller),
           tx.pure.string(purchaseData.dataHash),
-          coinInputs,
+          paymentCoin,
         ],
       });
 
-      logger.info('Purchase PTB built', {
-        buyer: purchaseData.buyer,
-        datapodId: purchaseData.datapodId,
-        price: purchaseData.price,
+      // 3. IMPORTANT: Shared objects CANNOT contain Balance<T>
+      // Escrow struct has balance: Balance<SUI> which prevents it from being shared
+      // Solution: Transfer escrow to sponsor instead of sharing
+      // Sponsor will own and control the escrow
+      tx.transferObjects([escrow], tx.pure.address(sponsor));
+
+      // 4. Transfer EscrowOwnerCap to sponsor
+      // Both objects now owned by sponsor for full control
+      tx.transferObjects([escrowOwnerCap], tx.pure.address(sponsor));
+
+      logger.info('Purchase PTB built with escrow', {
         purchaseId,
+        buyer: purchaseData.buyer,
+        seller: purchaseData.seller,
+        amount: purchaseData.price,
       });
 
       return tx;
@@ -274,13 +284,109 @@ export class BlockchainService {
   }
 
   /**
-   * Build PTB for releasing payment to seller after fulfillment
-   * Updates purchase status and transfers escrow to seller
-   * Note: This requires the PurchaseOwnerCap to be passed as an object
+   * Get PurchaseRequest Object ID from the custom purchase ID string
+   */
+  static async getPurchaseRequestObjectId(
+    customPurchaseId: string,
+    sellerAddress: string
+  ): Promise<string | null> {
+    try {
+      const client = this.getClient();
+      console.log(`[DEBUG] Looking for PurchaseRequest object with ID ${customPurchaseId} owned by ${sellerAddress}`);
+
+      const objects = await client.getOwnedObjects({
+        owner: sellerAddress,
+        filter: {
+          StructType: `${SUI_PACKAGE_ID}::purchase::PurchaseRequest`,
+        },
+        options: {
+          showContent: true,
+        },
+      });
+
+      if (!objects.data) {
+        console.log('[DEBUG] No PurchaseRequest objects found for seller');
+        return null;
+      }
+
+      console.log(`[DEBUG] Found ${objects.data.length} PurchaseRequest objects`);
+
+      for (const obj of objects.data) {
+        const content = obj.data?.content as any;
+        const purchaseIdField = content?.fields?.purchase_id;
+        console.log(`[DEBUG] Checking object ${obj.data?.objectId}, purchase_id: ${purchaseIdField}`);
+
+        if (purchaseIdField === customPurchaseId) {
+          console.log(`[DEBUG] Found match: ${obj.data?.objectId}`);
+          return obj.data?.objectId || null;
+        }
+      }
+
+      console.log(`[DEBUG] PurchaseRequest object not found for custom ID ${customPurchaseId}`);
+      return null;
+    } catch (error) {
+      console.error('[DEBUG] Failed to get PurchaseRequest object ID', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get PurchaseOwnerCap for a specific purchase
+   */
+  static async getPurchaseOwnerCap(purchaseId: string, owner: string): Promise<string | null> {
+    try {
+      const client = this.getClient();
+
+      logger.info(`Looking for PurchaseOwnerCap for purchase ${purchaseId} owned by ${owner}`);
+
+      // Query owner's objects to find PurchaseOwnerCap
+      const objects = await client.getOwnedObjects({
+        owner,
+        filter: {
+          StructType: `${SUI_PACKAGE_ID}::purchase::PurchaseOwnerCap`,
+        },
+        options: {
+          showContent: true,
+        },
+      });
+
+      if (!objects.data) {
+        logger.warn('No PurchaseOwnerCap objects found for owner');
+        return null;
+      }
+
+      logger.info(`Found ${objects.data.length} PurchaseOwnerCap objects`);
+
+      // Find the cap that matches the purchase ID
+      for (const obj of objects.data) {
+        const content = obj.data?.content as any;
+        const capPurchaseId = content?.fields?.purchase_id;
+
+        logger.info('Checking PurchaseOwnerCap', {
+          objectId: obj.data?.objectId,
+          capPurchaseId
+        });
+
+        if (capPurchaseId === purchaseId) {
+          return obj.data?.objectId || null;
+        }
+      }
+
+      logger.warn(`PurchaseOwnerCap not found for purchase ${purchaseId}`);
+      return null;
+    } catch (error) {
+      logger.error('Failed to get PurchaseOwnerCap', { error, purchaseId, owner });
+      return null;
+    }
+  }
+
+  /**
+   * Build PTB for completing purchase after fulfillment
+   * Releases escrow payment to seller and marks purchase as completed
    */
   static buildReleasePaymentPTB(
-    purchaseId: string,
     escrowId: string,
+    purchaseId: string,
     purchaseOwnerCapId: string,
     seller: string,
     sponsor: string
@@ -288,8 +394,8 @@ export class BlockchainService {
     try {
       const tx = new Transaction();
 
-      // Release escrow to seller
-      // Matches contract signature: release_escrow(escrow: &mut Escrow, seller_address: address, ctx: &mut TxContext)
+      // 1. Release escrow payment to seller
+      // Sponsor owns the escrow object, so can directly call release_escrow
       tx.moveCall({
         target: `${SUI_PACKAGE_ID}::escrow::release_escrow`,
         arguments: [
@@ -298,20 +404,13 @@ export class BlockchainService {
         ],
       });
 
-      // Update purchase status to completed
-      // Matches contract signature: complete_purchase(purchase: &mut PurchaseRequest, cap: &PurchaseOwnerCap, ctx: &mut TxContext)
+      // 2. Update purchase status to completed
       tx.moveCall({
         target: `${SUI_PACKAGE_ID}::purchase::complete_purchase`,
         arguments: [
           tx.object(purchaseId),
           tx.object(purchaseOwnerCapId),
         ],
-      });
-
-      logger.info('Release payment PTB built', {
-        purchaseId,
-        escrowId,
-        seller,
       });
 
       return tx;
@@ -322,30 +421,70 @@ export class BlockchainService {
   }
 
   /**
-   * Execute transaction on blockchain with sponsored gas fees
+   * Execute a transaction block with sponsor signature
    */
-  static async executeTransaction(
-    transaction: Transaction,
-    sponsor: boolean = true
-  ): Promise<string> {
-    try {
-      const client = this.getClient();
+  static async executeTransaction(transaction: Transaction): Promise<string> {
+    let lastError: any;
 
-      if (sponsor) {
-        // Sign transaction with sponsor's private key
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const client = this.getClient();
         const sponsorPrivateKey = env.SUI_SPONSOR_PRIVATE_KEY;
 
-        // Create keypair from private key (expects base64 format)
-        const keypair = Ed25519Keypair.fromSecretKey(
-          Buffer.from(sponsorPrivateKey, 'base64')
-        );
+        let privateKeyBytes: Uint8Array;
+
+        try {
+          // Try to decode as standard Sui private key (suiprivkey...)
+          const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
+          privateKeyBytes = decoded.secretKey;
+        } catch (e) {
+          // Fallback: try as raw base64 (legacy)
+          try {
+            privateKeyBytes = new Uint8Array(Buffer.from(sponsorPrivateKey, 'base64'));
+          } catch (err) {
+            throw new Error('Invalid private key format');
+          }
+        }
+
+        if (privateKeyBytes.length !== 32) {
+          if (privateKeyBytes.length === 64) {
+            privateKeyBytes = privateKeyBytes.slice(0, 32);
+          } else {
+            throw new Error(`Invalid private key length: expected 32 bytes, got ${privateKeyBytes.length}`);
+          }
+        }
+
+        let keypair;
+        try {
+          const decoded = decodeSuiPrivateKey(sponsorPrivateKey);
+          if (decoded.schema === 'ED25519') {
+            keypair = Ed25519Keypair.fromSecretKey(decoded.secretKey);
+          } else if (decoded.schema === 'Secp256k1') {
+            keypair = Secp256k1Keypair.fromSecretKey(decoded.secretKey);
+          } else if (decoded.schema === 'Secp256r1') {
+            keypair = Secp256r1Keypair.fromSecretKey(decoded.secretKey);
+          } else {
+            throw new Error(`Unsupported key schema: ${decoded.schema}`);
+          }
+        } catch (e) {
+          keypair = Secp256k1Keypair.fromSecretKey(privateKeyBytes);
+        }
+
+        // Set sender to sponsor address
+        transaction.setSender(keypair.toSuiAddress());
+
+        // Set gas budget (standard amount, can be adjusted)
+        transaction.setGasBudget(100000000); // 0.1 SUI
+
+        // Build the transaction bytes
+        const bytes = await transaction.build({ client });
 
         // Sign the transaction
-        const signedTransaction = await transaction.sign({ signer: keypair });
+        const signedTransaction = await keypair.signTransaction(bytes);
 
         // Execute the signed transaction
         const result = await client.executeTransactionBlock({
-          transactionBlock: signedTransaction.bytes,
+          transactionBlock: bytes,
           signature: signedTransaction.signature,
           options: {
             showEffects: true,
@@ -358,18 +497,47 @@ export class BlockchainService {
           status: result.effects?.status.status,
         });
 
+        if (result.effects?.status.status === 'failure') {
+          throw new Error(`Transaction failed on-chain: ${result.effects.status.error}`);
+        }
+
         return result.digest;
-      } else {
-        // For non-sponsored transactions (not implemented yet)
-        throw new Error('Non-sponsored transactions not implemented');
+      } catch (error: any) {
+        lastError = error;
+        const errorMsg = error.message || String(error);
+
+        // Retry on network errors or 504/502/500
+        if (attempt < MAX_RETRIES && (
+          errorMsg.includes('504') ||
+          errorMsg.includes('502') ||
+          errorMsg.includes('500') ||
+          errorMsg.includes('fetch failed') ||
+          errorMsg.includes('socket hang up')
+        )) {
+          logger.warn(`Transaction execution failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`, { error: errorMsg });
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+          continue;
+        }
+
+        // Enhanced error logging for final failure
+        const errorDetails = error instanceof Error ? error.message : String(error);
+        const errorObj = typeof error === 'object' ? JSON.stringify(error, null, 2) : String(error);
+
+        console.error('----------------------------------------');
+        console.error('BLOCKCHAIN TRANSACTION ERROR:');
+        console.error(errorDetails);
+        console.error('FULL ERROR OBJECT:');
+        console.error(errorObj);
+        console.error('----------------------------------------');
+
+        logger.error('Transaction execution failed', {
+          error: errorDetails,
+          fullError: errorObj,
+        });
+        throw new BlockchainError(`Transaction execution failed: ${errorDetails}`);
       }
-    } catch (error) {
-      logger.error('Transaction execution failed', {
-        error: error instanceof Error ? error.message : String(error),
-        sponsor,
-      });
-      throw new BlockchainError('Transaction execution failed');
     }
+    throw lastError;
   }
 
   /**
@@ -382,39 +550,61 @@ export class BlockchainService {
     try {
       const client = this.getClient();
       const startTime = Date.now();
+      let attempts = 0;
+
+      // Initial delay to allow transaction to be indexed
+      logger.debug('Waiting for initial indexing', { digest });
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       while (Date.now() - startTime < timeout) {
+        attempts++;
         try {
+          logger.debug('Polling transaction status', { digest, attempts });
           const tx = await client.getTransactionBlock({
             digest,
             options: {
               showEffects: true,
               showEvents: true,
+              showObjectChanges: true,
+              showInput: true,
+              showBalanceChanges: true, // Added this option
             },
           });
 
           if (tx.effects?.status.status === 'success') {
-            logger.info('Transaction confirmed', { digest });
+            logger.info('Transaction confirmed', { digest, attempts });
             return tx;
           }
 
           if (tx.effects?.status.status === 'failure') {
             throw new Error(`Transaction failed: ${tx.effects.status.error}`);
           }
+
+          // If we got here without success/failure, wait and retry
+          const elapsed = Date.now() - startTime;
+          logger.debug('Transaction still pending', { digest, attempts, elapsed });
+          await new Promise((resolve) => setTimeout(resolve, 2000));
         } catch (error) {
-          if (error instanceof Error && error.message.includes('not found')) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          if (errorMsg.includes('not found')) {
             // Transaction not yet indexed, wait and retry
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const elapsed = Date.now() - startTime;
+            logger.debug('Transaction not yet indexed', { digest, attempts, elapsed });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
             continue;
           }
           throw error;
         }
       }
 
-      throw new Error('Transaction confirmation timeout');
+      throw new Error(`Transaction confirmation timeout after ${attempts} attempts`);
     } catch (error) {
-      logger.error('Failed to wait for transaction', { error, digest });
-      throw new BlockchainError('Transaction confirmation failed');
+      logger.error('Failed to wait for transaction', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        digest
+      });
+      throw new BlockchainError(`Transaction confirmation failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -521,36 +711,89 @@ export class BlockchainService {
   }
 
   /**
-   * Query DataPod purchases events to track fulfillment
+   * Verify a payment transaction from buyer to sponsor
    */
-  static async queryPurchaseEvents(
-    eventType: string = 'PurchaseCreated',
-    limit: number = 50
-  ): Promise<any[]> {
+  static async verifyPaymentTransaction(
+    digest: string,
+    expectedAmount: number,
+    expectedSender: string,
+    expectedRecipient: string
+  ): Promise<boolean> {
     try {
-      const fullEventType = `${SUI_PACKAGE_ID}::purchase::${eventType}`;
-      return await this.queryEvents(fullEventType, limit);
-    } catch (error) {
-      logger.error('Failed to query purchase events', { error });
-      throw new BlockchainError('Failed to query purchase events');
-    }
-  }
+      logger.info('Verifying payment transaction', {
+        digest,
+        expectedAmount,
+        expectedSender,
+        expectedRecipient
+      });
 
-  /**
-   * Batch execute multiple transactions with retry logic
-   */
-  static async executeTransactionWithRetry(
-    transaction: Transaction,
-    maxRetries: number = MAX_RETRIES
-  ): Promise<string> {
-    return retry(
-      async () => {
-        const digest = await this.executeTransaction(transaction);
-        await this.waitForTransaction(digest);
-        return digest;
-      },
-      maxRetries,
-      RETRY_DELAY
-    );
+      const tx = await this.waitForTransaction(digest);
+
+      if (tx.effects?.status.status !== 'success') {
+        logger.warn('Payment transaction failed on-chain', { digest });
+        throw new Error(`Transaction status is ${tx.effects?.status.status}`);
+      }
+
+      // Verify sender
+      const sender = tx.transaction?.data?.sender;
+      if (!sender) {
+        throw new Error('Transaction sender not found (missing showInput?)');
+      }
+
+      if (sender !== expectedSender) {
+        logger.warn('Payment sender mismatch', { expected: expectedSender, actual: sender });
+        throw new Error(`Sender mismatch: expected ${expectedSender}, got ${sender}`);
+      }
+
+      // Verify balance changes
+      const balanceChanges = tx.balanceChanges || [];
+      logger.info('Checking balance changes', { count: balanceChanges.length, expectedRecipient });
+
+      const paymentReceived = balanceChanges.find((change: any) => {
+        const ownerAddress = change.owner?.AddressOwner || change.owner; // Handle potential structure variations
+        const isRecipient = ownerAddress === expectedRecipient;
+        const isSui = change.coinType === '0x2::sui::SUI';
+        const amount = BigInt(change.amount);
+
+        logger.info('Checking balance change', {
+          ownerAddress,
+          expectedRecipient,
+          isRecipient,
+          coinType: change.coinType,
+          isSui,
+          amount: amount.toString()
+        });
+
+        return isRecipient && isSui && amount > 0n;
+      });
+
+      if (!paymentReceived) {
+        const changesStr = JSON.stringify(balanceChanges, null, 2);
+        logger.warn('No payment to recipient found', { digest, expectedRecipient, balanceChanges });
+        throw new Error(`No payment found for recipient ${expectedRecipient}. Changes: ${changesStr}`);
+      }
+
+      const receivedAmount = BigInt(paymentReceived.amount);
+      const expectedBigInt = BigInt(expectedAmount);
+
+      if (receivedAmount < expectedBigInt) {
+        logger.warn('Insufficient payment amount', {
+          digest,
+          expected: expectedBigInt.toString(),
+          received: receivedAmount.toString()
+        });
+        throw new Error(`Insufficient amount: expected ${expectedBigInt}, got ${receivedAmount}`);
+      }
+
+      logger.info('Payment transaction verified successfully', {
+        digest,
+        amount: receivedAmount.toString()
+      });
+
+      return true;
+    } catch (error: any) {
+      logger.error('Failed to verify payment transaction', { error: error.message, digest });
+      throw error; // Re-throw to be caught by controller
+    }
   }
 }

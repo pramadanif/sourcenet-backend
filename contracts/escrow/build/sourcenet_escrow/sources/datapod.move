@@ -27,7 +27,7 @@ module sourcenet::datapod {
     }
 
     /// DataPod owner capability
-    public struct DataPodOwnerCap has key {
+    public struct DataPodOwnerCap has key, store {
         id: UID,
         datapod_id: address,
     }
@@ -77,7 +77,7 @@ module sourcenet::datapod {
         data_hash: String,
         blob_id: String,
         ctx: &mut TxContext,
-    ): (DataPod, DataPodOwnerCap) {
+    ) {
         assert!(price_sui > 0, EInvalidPrice);
 
         let id = object::new(ctx);
@@ -115,7 +115,9 @@ module sourcenet::datapod {
             price_sui: price_sui,
         });
 
-        (datapod, cap)
+        // Transfer both objects to sender
+        transfer::transfer(datapod, sender);
+        transfer::transfer(cap, sender);
     }
 
     /// Publish DataPod to marketplace

@@ -235,6 +235,18 @@ export const swaggerPaths = {
       },
     },
   },
+
+  '/buyer/purchases': {
+    get: {
+      tags: ['Buyer'],
+      summary: 'Get buyer purchases',
+      security: [{ bearerAuth: [] }],
+      responses: {
+        '200': { description: 'List of purchases' },
+      },
+    },
+  },
+  
   '/buyer/purchase': {
     post: {
       tags: ['Buyer'],

@@ -246,6 +246,8 @@ async function validatePurchaseRequest(purchaseId: string): Promise<any> {
 async function downloadOriginalBlob(purchaseId: string, blobId: string): Promise<Buffer> {
   const startTime = performance.now();
   try {
+    logger.debug(`[purchase:${purchaseId}] Downloading blob: ${blobId}`);
+
     const blob = await retryWithCustomDelays(
       async () => {
         try {
@@ -410,20 +412,39 @@ async function uploadEncryptedBlob(
  */
 async function updateBlockchain(
   purchaseId: string,
+  suiPurchaseId: string,
   datapodId: string,
   buyerAddress: string,
+  sellerAddress: string,
   blobId: string,
   priceSui: number,
-  escrowId: string,
-  purchaseOwnerCapId: string,
-  sellerAddress: string,
 ): Promise<string> {
   const startTime = performance.now();
   try {
-    // Build PTB transaction for blockchain update
+    // Get PurchaseOwnerCap ID (owned by sponsor)
+    // Note: suiPurchaseId is the actual Object ID of the PurchaseRequest (shared object)
+    const purchaseOwnerCapId = await BlockchainService.getPurchaseOwnerCap(
+      suiPurchaseId,
+      env.SUI_SPONSOR_ADDRESS
+    );
+
+    if (!purchaseOwnerCapId) {
+      throw new Error(`PurchaseOwnerCap not found for purchase ${purchaseId} (Sui ID: ${suiPurchaseId}) owned by sponsor`);
+    }
+
+    // Get escrow object ID from database
+    const escrow = await prisma.escrowTransaction.findUnique({
+      where: { purchaseRequestId: purchaseId }
+    });
+
+    if (!escrow || !escrow.escrowObjectId) {
+      throw new Error(`Escrow not found or missing object ID for purchase ${purchaseId}`);
+    }
+
+    // Build PTB transaction for blockchain update (release payment + complete purchase)
     const tx = BlockchainService.buildReleasePaymentPTB(
-      purchaseId,
-      escrowId,
+      escrow.escrowObjectId,
+      suiPurchaseId,
       purchaseOwnerCapId,
       sellerAddress,
       env.SUI_SPONSOR_ADDRESS
@@ -466,7 +487,7 @@ async function updateDatabase(
   purchaseId: string,
   datapodId: string,
   encryptedBlobId: string,
-  encryptedEphemeralKey: string,
+  encryptedPayload: EncryptedBlobPayload,
   txDigest: string,
   buyerAddress: string,
 ): Promise<void> {
@@ -479,7 +500,11 @@ async function updateDatabase(
           where: { id: purchaseId },
           data: {
             encryptedBlobId,
-            decryptionKey: encryptedEphemeralKey,
+            decryptionKey: JSON.stringify({
+              encryptedEphemeralKey: encryptedPayload.encryptedEphemeralKey,
+              nonce: encryptedPayload.nonce,
+              tag: encryptedPayload.tag
+            }),
             status: 'completed',
             txDigest,
             completedAt: new Date(),
@@ -721,28 +746,15 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
     const encryptedBlobId = await uploadEncryptedBlob(purchase_id, encryptedPayload);
 
     // Step 5: Update blockchain with blob_id
-    // Fetch escrow and purchase owner cap IDs from database
-    const escrowTransaction = await prisma.escrowTransaction.findFirst({
-      where: { purchaseRequestId: purchaseRequest.id },
-    });
-
-    if (!escrowTransaction) {
-      throw new Error('Escrow transaction not found for purchase');
-    }
-
-    // TODO: Retrieve purchaseOwnerCapId from blockchain or database
-    // For now, generate deterministic ID based on purchase_id
-    const purchaseOwnerCapId = `0x${Buffer.from(`cap_${purchase_id}`).toString('hex').padStart(64, '0')}`;
-
+    // Step 5: Update blockchain with blob_id
     const txDigest = await updateBlockchain(
       purchase_id,
+      purchaseRequest.purchaseRequestId,
       datapod_id,
       buyer_address,
+      seller_address,
       encryptedBlobId,
       price_sui,
-      escrowTransaction.id,
-      purchaseOwnerCapId,
-      seller_address,
     );
 
     // Step 6: Update database
@@ -750,7 +762,7 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
       purchase_id,
       purchaseRequest.datapodId,
       encryptedBlobId,
-      encryptedPayload.encryptedEphemeralKey,
+      encryptedPayload,
       txDigest,
       buyer_address,
     );
@@ -769,6 +781,17 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
       message: 'Purchase fulfilled: file decrypted, re-encrypted, and payment released',
     });
   } catch (error) {
+    console.error('----------------------------------------');
+    console.error('CRITICAL FULFILLMENT ERROR:', error);
+    // @ts-ignore
+    if (error.response) {
+      // @ts-ignore
+      console.error('Axios Status:', error.response?.status);
+      // @ts-ignore
+      console.error('Axios Data:', JSON.stringify(error.response?.data, null, 2));
+    }
+    console.error('----------------------------------------');
+
     logger.error('Fulfillment job processing failed', {
       jobId: job.id,
       purchaseId: purchase_id,
@@ -779,13 +802,14 @@ const processFulfillmentJob = async (job: Job<FulfillmentJobData>): Promise<void
 
     // Mark purchase as failed
     try {
-      await prisma.purchaseRequest.update({
-        where: { id: purchase_id },
-        data: {
-          status: 'failed',
-        },
-      });
-      logger.warn(`[purchase:${purchase_id}] Purchase marked as failed`);
+      // TEMPORARILY DISABLED FOR DEBUGGING TO ALLOW RETRIES
+      // await prisma.purchaseRequest.update({
+      //   where: { id: purchase_id },
+      //   data: {
+      //     status: 'failed',
+      //   },
+      // });
+      logger.warn(`[purchase:${purchase_id}] Purchase marked as failed (SKIPPED FOR DEBUGGING)`);
     } catch (updateError) {
       logger.error('Failed to update purchase status to failed', { error: updateError });
     }

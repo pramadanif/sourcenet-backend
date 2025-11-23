@@ -43,7 +43,7 @@ export const authMiddleware = (req: Request, res: Response, next: NextFunction):
 
     // Extract token from "Bearer <token>"
     const parts = authHeader.split(' ');
-    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
       logger.warn('Invalid authorization header format', { requestId: req.requestId });
       throw new AuthError('Invalid authorization header format');
     }

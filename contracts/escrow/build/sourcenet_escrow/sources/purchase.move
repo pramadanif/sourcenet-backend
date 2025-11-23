@@ -22,7 +22,7 @@ module sourcenet::purchase {
     }
 
     /// PurchaseRequest owner capability
-    public struct PurchaseOwnerCap has key {
+    public struct PurchaseOwnerCap has key, store {
         id: UID,
         purchase_id: address,
     }

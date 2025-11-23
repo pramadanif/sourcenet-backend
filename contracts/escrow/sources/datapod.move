@@ -27,7 +27,7 @@ module sourcenet::datapod {
     }
 
     /// DataPod owner capability
-    public struct DataPodOwnerCap has key {
+    public struct DataPodOwnerCap has key, store {
         id: UID,
         datapod_id: address,
     }
@@ -68,7 +68,7 @@ module sourcenet::datapod {
     const EInvalidTitle: u64 = 4;
 
     /// Create new DataPod
-    public entry fun create_datapod(
+    public fun create_datapod(
         datapod_id: String,
         title: String,
         category: String,
@@ -77,7 +77,7 @@ module sourcenet::datapod {
         data_hash: String,
         blob_id: String,
         ctx: &mut TxContext,
-    ): (DataPod, DataPodOwnerCap) {
+    ) {
         assert!(price_sui > 0, EInvalidPrice);
 
         let id = object::new(ctx);
@@ -115,11 +115,13 @@ module sourcenet::datapod {
             price_sui: price_sui,
         });
 
-        (datapod, cap)
+        // Transfer both objects to sender
+        transfer::transfer(datapod, sender);
+        transfer::transfer(cap, sender);
     }
 
     /// Publish DataPod to marketplace
-    public entry fun publish_datapod(
+    public fun publish_datapod(
         datapod: &mut DataPod,
         kiosk_id: String,
         cap: &DataPodOwnerCap,
@@ -143,7 +145,7 @@ module sourcenet::datapod {
     }
 
     /// Delist DataPod from marketplace
-    public entry fun delist_datapod(
+    public fun delist_datapod(
         datapod: &mut DataPod,
         cap: &DataPodOwnerCap,
         ctx: &mut TxContext,
@@ -160,7 +162,7 @@ module sourcenet::datapod {
     }
 
     /// Update DataPod price
-    public entry fun update_price(
+    public fun update_price(
         datapod: &mut DataPod,
         new_price: u64,
         cap: &DataPodOwnerCap,
@@ -179,12 +181,12 @@ module sourcenet::datapod {
     }
 
     /// Increment total sales
-    public entry fun increment_sales(datapod: &mut DataPod) {
+    public fun increment_sales(datapod: &mut DataPod) {
         datapod.total_sales = datapod.total_sales + 1;
     }
 
     /// Update average rating
-    public entry fun update_rating(datapod: &mut DataPod, new_rating: u64) {
+    public fun update_rating(datapod: &mut DataPod, new_rating: u64) {
         datapod.average_rating = new_rating;
     }
 

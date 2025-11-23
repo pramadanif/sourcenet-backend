@@ -80,23 +80,67 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
 
     // Store in database
     const uploadId = randomUUID();
-    const seller = await prisma.user.findUnique({
-      where: { zkloginAddress: req.user!.address },
+    const seller = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
     });
 
     if (!seller) {
       throw new ValidationError('Seller not found');
     }
 
+    // Check for existing upload with same data_hash
+    const existingUpload = await prisma.uploadStaging.findUnique({
+      where: { dataHash },
+    });
+
+    if (existingUpload) {
+      logger.info('Upload with same data hash already exists', {
+        requestId: req.requestId,
+        existingUploadId: existingUpload.id,
+        dataHash,
+      });
+
+      // If it exists and is already published, reject with appropriate message
+      if (existingUpload.status === 'published') {
+        throw new ValidationError(
+          'A DataPod with this content already exists in the marketplace. Upload unique content.'
+        );
+      }
+
+      // If pending/expired, return the existing upload
+      res.status(200).json({
+        status: 'success',
+        upload_id: existingUpload.id,
+        data_hash: dataHash,
+        preview_data: previewData.substring(0, 500),
+        file_size: file.size,
+        message: 'File matches existing upload. Using existing staging record.',
+        warning: 'This content is already in your uploads',
+      });
+      return;
+    }
+
     const uploadStaging = await prisma.uploadStaging.create({
       data: {
         sellerId: seller.id,
         datapodId: null, // Will be set after publishing
-        filePath: uploadedFile.url,
+        filePath: uploadedFile.cid, // Store blob ID, not URL
         dataHash,
         metadata: {
           ...parsedMetadata,
+          // File metadata for download
+          mimeType: file.mimetype,
+          originalName: file.originalname,
+          fileSize: file.size,
+          // Encryption metadata for fulfillment
           encryptionKey: encryptionKey.toString('base64'), // Store key for fulfillment job
+          blobId: uploadedFile.cid, // Also store in metadata for clarity
+          walrusUrl: uploadedFile.url, // Keep URL for reference
         },
         status: 'pending',
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
@@ -148,8 +192,13 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
     }
 
     // Verify seller owns this upload
-    const seller = await prisma.user.findUnique({
-      where: { zkloginAddress: req.user!.address },
+    const seller = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
     });
 
     if (!seller || uploadStaging.sellerId !== seller.id) {
@@ -168,28 +217,41 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
     let txDigest: string;
     let datapodId: string;
     let kioskId: string;
+    const sellerAddress = seller.zkloginAddress || seller.walletAddress;
 
     try {
-      if (!seller.zkloginAddress) {
-        throw new ValidationError('Seller zklogin address not found');
+      if (!sellerAddress) {
+        throw new ValidationError('Seller address not found (neither zkLogin nor wallet)');
       }
+
+      // Get seller's Kiosk
+      const kioskData = await BlockchainService.getOrCreateSellerKiosk(sellerAddress);
+
+      const priceInMist = BigInt(Math.floor(Number(metadata.price_sui) * 1e9));
+      logger.info('Building Publish PTB', {
+        priceSui: metadata.price_sui,
+        priceMist: priceInMist.toString(),
+        typeOfPriceSui: typeof metadata.price_sui
+      });
+
       // Build PTB for publishing DataPod
       const publishTx = BlockchainService.buildPublishPTB(
         {
           title: metadata.title,
           category: metadata.category,
-          price: Math.floor(metadata.price_sui * 1e9), // Convert to MIST
+          description: metadata.description || '',
+          price: priceInMist, // Convert to MIST (BigInt)
           dataHash: uploadStaging.dataHash,
-          blobId: uploadStaging.filePath,
+          blobId: uploadStaging.filePath, // Now contains blob ID directly
           uploadId: upload_id,
-          sellerAddress: seller.zkloginAddress,
+          sellerAddress: sellerAddress,
         },
-        seller.zkloginAddress,
-        { kioskId: '', kioskOwnerCap: '' },
+        sellerAddress,
+        kioskData,
       );
 
       // Execute transaction with sponsored gas
-      txDigest = await BlockchainService.executeTransaction(publishTx, true);
+      txDigest = await BlockchainService.executeTransaction(publishTx);
 
       // Wait for transaction confirmation
       const txResult = await BlockchainService.waitForTransaction(txDigest);
@@ -205,21 +267,14 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
         datapodId,
         kioskId,
       });
-    } catch (blockchainError) {
+    } catch (blockchainError: any) {
       logger.error('Failed to publish DataPod on blockchain', {
         error: blockchainError,
         requestId: req.requestId,
       });
-      throw new BlockchainError('Failed to publish DataPod on blockchain');
+      // Return detailed error for debugging
+      throw new BlockchainError(`Failed to publish DataPod on blockchain: ${blockchainError.message || blockchainError}`);
     }
-
-    // Update upload staging
-    await prisma.uploadStaging.update({
-      where: { id: upload_id },
-      data: {
-        status: 'published',
-      },
-    });
 
     // Create DataPod record with blockchain transaction digest
     const datapod = await prisma.dataPod.create({
@@ -241,12 +296,21 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
       },
     });
 
+    // Update upload staging with published status and link to DataPod
+    await prisma.uploadStaging.update({
+      where: { id: upload_id },
+      data: {
+        status: 'published',
+        datapodId: datapod.id,
+      },
+    });
+
     // Store transaction digest for audit trail
     await prisma.transactionAudit.create({
       data: {
         txDigest,
         txType: 'publish_datapod',
-        userAddress: seller.zkloginAddress || '',
+        userAddress: sellerAddress || '',
         userId: seller.id,
         datapodId: datapod.id,
         data: { datapodId, kioskId },
@@ -304,8 +368,13 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
  */
 export const getSellerDataPods = async (req: Request, res: Response): Promise<void> => {
   try {
-    const seller = await prisma.user.findUnique({
-      where: { zkloginAddress: req.user!.address },
+    const seller = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
     });
 
     if (!seller) {
@@ -346,8 +415,13 @@ export const getSellerDataPods = async (req: Request, res: Response): Promise<vo
  */
 export const getSellerStats = async (req: Request, res: Response): Promise<void> => {
   try {
-    const seller = await prisma.user.findUnique({
-      where: { zkloginAddress: req.user!.address },
+    const seller = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { zkloginAddress: req.user!.address },
+          { walletAddress: req.user!.address },
+        ],
+      },
     });
 
     if (!seller) {

@@ -24,7 +24,7 @@ module sourcenet::escrow {
     }
 
     /// Escrow owner capability
-    public struct EscrowOwnerCap has key {
+    public struct EscrowOwnerCap has key, store {
         id: UID,
         escrow_id: address,
     }
