@@ -599,8 +599,12 @@ export class BlockchainService {
 
       throw new Error(`Transaction confirmation timeout after ${attempts} attempts`);
     } catch (error) {
-      logger.error('Failed to wait for transaction', { error, digest });
-      throw new BlockchainError('Transaction confirmation failed');
+      logger.error('Failed to wait for transaction', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        digest
+      });
+      throw new BlockchainError(`Transaction confirmation failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

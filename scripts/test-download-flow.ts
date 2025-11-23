@@ -13,16 +13,17 @@ import FormData from 'form-data';
 import dotenv from 'dotenv';
 
 // Force Port 3000 for consistency
-process.env.PORT = '3000';
-process.env.API_BASE_URL = 'http://localhost:3000/api';
+// Force Port 3001 for consistency with running dev server
+process.env.PORT = '3001';
+process.env.API_BASE_URL = 'http://localhost:3001/api';
 
-import '../src/main'; // Starts the server
+// import '../src/main'; // Use running server instead
 import { EncryptionService } from '../src/services/encryption.service';
 
 // Load env vars
 dotenv.config();
 
-const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000/api';
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3001/api';
 const SUI_RPC_URL = process.env.SUI_RPC_URL || getFullnodeUrl('testnet');
 const SPONSOR_PRIVATE_KEY = process.env.SUI_SPONSOR_PRIVATE_KEY || '';
 const SPONSOR_ADDRESS = process.env.SUI_SPONSOR_ADDRESS || '';
@@ -173,6 +174,31 @@ async function runTest() {
         await checkBalanceAndFund(EFFECTIVE_SPONSOR_ADDRESS);
         await fundAddress(buyerAddress, 50000000); // 0.05 SUI
 
+        // --- DIAGNOSTIC CHECKS ---
+        console.log('\n🔍 Running Diagnostic Checks...');
+        try {
+            const health = await axios.get(`${API_BASE_URL.replace('/api', '')}/health`);
+            console.log('✅ Health Check:', health.status, health.data);
+        } catch (e: any) {
+            console.error('❌ Health Check Failed:', e.message);
+        }
+
+        try {
+            // Expect 401
+            await axios.get(`${API_BASE_URL}/buyer/purchases`);
+            console.error('❌ /buyer/purchases should require auth but got 200 OK');
+        } catch (e: any) {
+            if (e.response && e.response.status === 401) {
+                console.log('✅ /buyer/purchases exists (got 401 as expected)');
+            } else if (e.response && e.response.status === 404) {
+                console.error('❌ /buyer/purchases NOT FOUND (404)');
+                console.error('Response:', JSON.stringify(e.response.data, null, 2));
+            } else {
+                console.error('❌ /buyer/purchases error:', e.message);
+            }
+        }
+        // -------------------------
+
         await seedUser(buyerAddress, 'Buyer');
         const buyerToken = generateToken('buyer-id-' + Date.now(), buyerAddress);
 
@@ -222,15 +248,34 @@ async function runTest() {
         let fulfilled = false;
         let attempts = 0;
         while (!fulfilled && attempts < 30) { // Wait up to 60s
-            const statusRes = await axios.get(`${API_BASE_URL}/buyer/purchases`, {
-                headers: { 'Authorization': `Bearer ${buyerToken}` }
-            });
-            const purchase = statusRes.data.data.purchases.find((p: any) => p.purchaseRequestId === purchaseRequestId);
+            try {
+                console.log(`\nPolling attempt ${attempts + 1}...`);
+                const statusRes = await axios.get(`${API_BASE_URL}/buyer/purchases`, {
+                    headers: { 'Authorization': `Bearer ${buyerToken}` }
+                });
 
-            if (purchase && purchase.status === 'completed') {
-                console.log('✅ Purchase Fulfilled!');
-                fulfilled = true;
-            } else {
+                // console.log('Purchases found:', statusRes.data.data.purchases.length);
+                const purchase = statusRes.data.data.purchases.find((p: any) => p.purchaseRequestId === purchaseRequestId);
+
+                if (purchase) {
+                    console.log('Purchase Status:', purchase.status);
+                    if (purchase.status === 'completed') {
+                        console.log('✅ Purchase Fulfilled!');
+                        fulfilled = true;
+                    }
+                } else {
+                    console.log('Purchase not found in list yet.');
+                }
+            } catch (pollError: any) {
+                console.error('Polling failed:', pollError.message);
+                if (pollError.response) {
+                    console.error('Poll Status:', pollError.response.status);
+                    console.error('Poll URL:', pollError.config?.url);
+                }
+                throw pollError; // Re-throw to exit
+            }
+
+            if (!fulfilled) {
                 process.stdout.write('.');
                 await new Promise(r => setTimeout(r, 2000));
                 attempts++;
@@ -288,8 +333,13 @@ async function runTest() {
 
     } catch (error: any) {
         console.error('\n❌ Test Failed:', error.message);
+        if (error.config) {
+            console.error('Request URL:', error.config.url);
+            console.error('Request Method:', error.config.method);
+        }
         if (error.response) {
-            console.error('Response:', JSON.stringify(error.response.data, null, 2));
+            console.error('Response Status:', error.response.status);
+            console.error('Response Data:', JSON.stringify(error.response.data, null, 2));
         }
         process.exit(1);
     } finally {

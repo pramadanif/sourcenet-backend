@@ -133,6 +133,11 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
         dataHash,
         metadata: {
           ...parsedMetadata,
+          // File metadata for download
+          mimeType: file.mimetype,
+          originalName: file.originalname,
+          fileSize: file.size,
+          // Encryption metadata for fulfillment
           encryptionKey: encryptionKey.toString('base64'), // Store key for fulfillment job
           blobId: uploadedFile.cid, // Also store in metadata for clarity
           walrusUrl: uploadedFile.url, // Keep URL for reference

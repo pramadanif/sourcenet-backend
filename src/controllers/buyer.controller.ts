@@ -722,7 +722,13 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
     // 1. Verify Purchase
     const purchase = await prisma.purchaseRequest.findUnique({
       where: { purchaseRequestId: purchase_id },
-      include: { datapod: true },
+      include: {
+        datapod: {
+          include: {
+            uploadStaging: true,
+          },
+        },
+      },
     });
 
     if (!purchase) {
@@ -743,12 +749,24 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
 
     // 2. Generate URLs
     const directUrl = WalrusService.getBlobUrl(purchase.encryptedBlobId);
-    const proxyUrl = `${env.API_BASE_URL}/buyer/download/${purchase_id}`;
+    const proxyUrl = `${env.API_BASE_URL}/api/buyer/download/${purchase_id}`;
+
+    // 3. Get file metadata from upload staging
+    const uploadStaging = purchase.datapod.uploadStaging;
+
+    const metadata = uploadStaging?.metadata as any;
+    const fileMetadata = {
+      title: purchase.datapod.title,
+      mimeType: metadata?.mimeType || 'application/octet-stream',
+      originalName: metadata?.originalName || `${purchase.datapod.title}.bin`,
+      fileSize: metadata?.fileSize || 0,
+    };
 
     logger.info('Generated download URLs', {
       requestId: req.requestId,
       purchaseId: purchase_id,
-      blobId: purchase.encryptedBlobId
+      blobId: purchase.encryptedBlobId,
+      fileMetadata,
     });
 
     res.status(200).json({
@@ -758,6 +776,7 @@ export const getDownloadUrl = async (req: Request, res: Response): Promise<void>
         proxy_url: proxyUrl,
         blob_id: purchase.encryptedBlobId,
         decryption_key: purchase.decryptionKey,
+        file_metadata: fileMetadata,
         expires_at: new Date(Date.now() + 3600 * 1000).toISOString(), // 1 hour validity (mock)
       },
     });
