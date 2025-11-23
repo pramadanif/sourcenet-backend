@@ -5,6 +5,7 @@ import authRoutes from './auth.routes';
 import sellerRoutes from './seller.routes';
 import reviewRoutes from './review.routes';
 import healthRoutes from './health.routes';
+import aiRoutes from './ai.routes';
 
 const router = Router();
 
@@ -16,6 +17,11 @@ if (healthRoutes) {
 // Auth routes
 if (authRoutes) {
   router.use('/auth', authRoutes);
+}
+
+// AI routes
+if (aiRoutes) {
+  router.use('/ai', aiRoutes);
 }
 
 // Marketplace routes

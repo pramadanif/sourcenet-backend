@@ -42,6 +42,7 @@ model User {
   uploadStagings    UploadStaging[]
   escrowTransactions EscrowTransaction[] @relation("seller")
   transactionAudits TransactionAudit[]
+  aiConversations   AiConversation[]
 
   @@index([zkloginAddress])
   @@index([createdAt])
@@ -217,4 +218,39 @@ model IndexerCheckpoint {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("indexer_checkpoints")
+}
+
+// AI Conversation model
+model AiConversation {
+  id            String      @id @default(uuid()) @db.Uuid
+  userId        String      @db.Uuid @map("user_id")
+  title         String      @db.VarChar(255)
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @default(now()) @updatedAt @map("updated_at")
+
+  // Relations
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages      AiMessage[]
+
+  @@index([userId])
+  @@index([updatedAt])
+  @@map("ai_conversations")
+}
+
+// AI Message model
+model AiMessage {
+  id             String         @id @default(uuid()) @db.Uuid
+  conversationId String         @db.Uuid @map("conversation_id")
+  role           String         @db.VarChar(20) // user, assistant, system
+  content        String         @db.Text
+  tokensUsed     Int?           @map("tokens_used")
+  context        Json?          @map("context") // Stores context like dataPodId, page, etc.
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  // Relations
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("ai_messages")
 }

@@ -57,6 +57,13 @@ const envSchema = z.object({
   // Logging
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   SENTRY_DSN: z.string().url().optional(),
+
+  // AI
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().optional(),
+  OPENAI_MAX_TOKENS: z.coerce.number().optional(),
+  OPENAI_TEMPERATURE: z.coerce.number().optional(),
 });
 
 export type Environment = z.infer<typeof envSchema>;

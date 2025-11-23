@@ -139,3 +139,19 @@ export const authRateLimiter = createIpRateLimiter(
   900000, // 15 minutes
   5, // 5 requests
 );
+
+/**
+ * AI User rate limiter: 20 requests/minute per user
+ */
+export const aiUserRateLimiter = createUserRateLimiter(
+  60000, // 1 minute
+  20, // 20 requests
+);
+
+/**
+ * AI IP rate limiter: 100 requests/minute per IP
+ */
+export const aiIpRateLimiter = createIpRateLimiter(
+  60000, // 1 minute
+  100, // 100 requests
+);
