@@ -8,6 +8,8 @@ SourceNet is a decentralized data marketplace built on **Sui Blockchain** with *
 
 ### Backend
 - [🌐 Architecture Overview](#-architecture-overview)
+- [🤖 AI Integration](#-ai-integration)
+- [🐋 Walrus Protocol Integration](#-walrus-protocol-integration)
 - [🔄 Technical Flows](#-technical-flows)
 - [🛠️ Tech Stack](#️-tech-stack)
 - [⚙️ Prerequisites](#️-prerequisites)
@@ -65,6 +67,234 @@ SourceNet follows a microservices-oriented architecture:
 6. **Real-time Layer** - WebSocket for live updates
 7. **Job Queue** - BullMQ for background processing
 8. **Indexer** - Blockchain event listener and synchronizer
+
+---
+
+## 🤖 AI Integration
+
+SourceNet integrates **AI-powered assistance** using **OpenAI GPT-4** (via OpenRouter) to help users navigate the platform, understand DataPods, and make informed decisions.
+
+### Key Features
+
+- **Conversational AI**: Multi-turn conversations with full context awareness
+- **DataPod Context**: AI understands specific DataPods being viewed
+- **Conversation History**: Save and retrieve past conversations
+- **Token Tracking**: Monitor AI usage and costs
+- **Rate Limiting**: Protected against abuse (20 req/min per user, 100 req/min per IP)
+
+### AI Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/ai/chat` | Send message and get AI response |
+| `GET` | `/api/ai/conversations` | List user's conversations (paginated) |
+| `GET` | `/api/ai/conversations/:id` | Get full conversation with messages |
+| `DELETE` | `/api/ai/conversations/:id` | Delete conversation |
+
+### Example Usage
+
+```typescript
+// Send a message to AI
+POST /api/ai/chat
+{
+  "message": "How do I create a DataPod?",
+  "conversationId": "optional-conversation-id",
+  "context": {
+    "dataPodId": "uuid",
+    "page": "seller-dashboard"
+  }
+}
+
+// Response
+{
+  "success": true,
+  "data": {
+    "conversationId": "uuid",
+    "message": "To create a DataPod...",
+    "timestamp": "2024-11-25T09:28:00Z",
+    "tokens": { "total": 150 }
+  }
+}
+```
+
+### Architecture
+
+```
+┌─────────────┐
+│   Frontend  │
+└──────┬──────┘
+       │ POST /api/ai/chat
+       ▼
+┌──────────────────┐
+│  AI Controller   │
+│  (Auth + Rate    │
+│   Limiting)      │
+└──────┬───────────┘
+       │
+       ▼
+┌──────────────────┐
+│   AI Service     │
+│  - Context build │
+│  - OpenAI call   │
+└──────┬───────────┘
+       │
+       ▼
+┌──────────────────┐      ┌──────────────┐
+│   PostgreSQL     │      │  OpenRouter  │
+│  - Conversations │◄────►│  (GPT-4)     │
+│  - Messages      │      └──────────────┘
+└──────────────────┘
+```
+
+### AI System Prompt
+
+The AI is configured with knowledge about SourceNet's:
+- Marketplace features and data upload/purchase flows
+- Sui blockchain integration and escrow mechanisms
+- Walrus decentralized storage
+- ZKLogin authentication
+- Review and rating system
+
+📖 **Full Documentation**: [AI Integration Guide](./docs/AI_INTEGRATION_GUIDE.md)
+
+---
+
+## 🐋 Walrus Protocol Integration
+
+SourceNet uses **Walrus Protocol** for decentralized, immutable data storage on the Sui blockchain ecosystem.
+
+### Why Walrus?
+
+- **Decentralized**: No single point of failure
+- **Immutable**: Data cannot be altered once stored
+- **Blockchain-Native**: Built for Sui ecosystem
+- **Cost-Effective**: Lower storage costs compared to traditional solutions
+- **High Availability**: Distributed across multiple nodes
+
+### Walrus Storage Flow
+
+```
+┌──────────────┐
+│   Upload     │
+│   Request    │
+└──────┬───────┘
+       │
+       │ 1. Encrypt file with symmetric key
+       ▼
+┌──────────────────────────────────────┐
+│        Storage Service               │
+│  StorageService.uploadToWalrus()     │
+└──────┬───────────────────────────────┘
+       │
+       │ 2. Upload to Walrus Publisher
+       │    POST https://publisher.walrus-testnet.walrus.space/v1/store
+       ▼
+┌──────────────────────────────────────┐
+│      Walrus Publisher Node           │
+│  (Testnet: walrus-testnet)           │
+└──────┬───────────────────────────────┘
+       │
+       │ 3. Returns blob_id (unique identifier)
+       ▼
+┌──────────────────────────────────────┐
+│   Walrus Distributed Storage         │
+│   - Data split into erasure-coded    │
+│     chunks                            │
+│   - Distributed across storage nodes  │
+│   - Stored with redundancy            │
+└──────┬───────────────────────────────┘
+       │
+       │ 4. Save blob_id to PostgreSQL
+       ▼
+┌──────────────────────────────────────┐
+│      Database Record                 │
+│  - datapod.blobId                    │
+│  - purchaseRequest.encryptedBlobId   │
+└──────────────────────────────────────┘
+```
+
+### Download Flow
+
+```
+┌──────────────┐
+│   Download   │
+│   Request    │
+└──────┬───────┘
+       │
+       │ 1. Fetch blob_id from database
+       ▼
+┌──────────────────────────────────────┐
+│        Storage Service               │
+│  StorageService.downloadFromWalrus() │
+└──────┬───────────────────────────────┘
+       │
+       │ 2. Retrieve from Walrus Gateway
+       │    GET https://gateway.walrus.space/ipfs/{blob_id}
+       ▼
+┌──────────────────────────────────────┐
+│      Walrus Gateway                  │
+│  - Aggregates chunks                 │
+│  - Reconstructs original file        │
+└──────┬───────────────────────────────┘
+       │
+       │ 3. Returns encrypted file buffer
+       ▼
+┌──────────────────────────────────────┐
+│      Backend API                     │
+│  - Stream to buyer                   │
+│  - Include decryption key in header  │
+└──────────────────────────────────────┘
+```
+
+### Walrus Configuration
+
+```typescript
+// Environment Variables
+WALRUS_API_URL=https://publisher.walrus-testnet.walrus.space
+WALRUS_BLOB_ENDPOINT=https://blobs.testnet.walrus.io
+
+// Storage Service Configuration
+const GATEWAY_URL = 'https://gateway.walrus.space/ipfs';
+const REQUEST_TIMEOUT = 30000; // 30 seconds
+```
+
+### Key Operations
+
+#### Upload File
+```typescript
+const result = await StorageService.uploadToWalrus(file, 'uploads');
+// Returns: { cid: 'blob_id', url: 'https://gateway...', size: 12345 }
+```
+
+#### Download File
+```typescript
+const buffer = await StorageService.downloadFromWalrus(blobId);
+// Returns: Buffer containing encrypted file
+```
+
+#### Verify File Exists
+```typescript
+const exists = await StorageService.verifyFileExists(blobId);
+// Returns: boolean
+```
+
+### Data Encryption with Walrus
+
+1. **Seller Upload**: File encrypted with random symmetric key → Uploaded to Walrus
+2. **Storage**: Walrus stores encrypted blob, returns `blob_id`
+3. **Purchase**: Backend re-encrypts file with buyer's public key → New Walrus blob
+4. **Download**: Buyer retrieves encrypted blob → Decrypts locally with private key
+
+### Walrus vs Traditional Storage
+
+| Feature | Walrus | AWS S3 | IPFS |
+|---------|---------|--------|------|
+| Decentralization | ✅ Full | ❌ Centralized | ✅ Full |
+| Immutability | ✅ Yes | ⚠️ Optional | ✅ Yes |
+| Blockchain Native | ✅ Sui | ❌ No | ⚠️ Partial |
+| Cost | 💰 Low | 💰💰 Medium | 💰 Variable |
+| Availability | ⚡ High | ⚡⚡⚡ Very High | ⚡⚡ Medium |
+| Erasure Coding | ✅ Built-in | ❌ No | ❌ No |
 
 ---
 
