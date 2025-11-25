@@ -12,8 +12,8 @@ export const corsConfig = {
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:3001',
-      'http://127.0.0.1:3000',
-      ...(env.CORS_ORIGINS ? env.CORS_ORIGINS.split(',') : []),
+      'https://sourcenet-fe.vercel.app/',
+      ...(env.CORS_ORIGINS ? env.CORS_ORIGINS.split(',').map(o => o.trim()).filter(Boolean) : []),
     ].filter(Boolean);
 
     // Add production URLs if available
