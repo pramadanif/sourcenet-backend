@@ -141,7 +141,7 @@ POST /api/ai/chat
        ▼
 ┌──────────────────┐      ┌──────────────┐
 │   PostgreSQL     │      │  OpenRouter  │
-│  - Conversations │◄────►│  (GPT-4)     │
+│  - Conversations │◄────►│  (Deepseek-V3)     │
 │  - Messages      │      └──────────────┘
 └──────────────────┘
 ```
