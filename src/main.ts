@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { v4 as uuidv4 } from 'uuid';
+import { corsConfig } from '@/middleware/cors.middleware';
 import { logger } from '@/utils/logger';
 import { env } from '@/config/env';
 import routes from '@/routes';
@@ -23,11 +24,7 @@ let wsServer: WebSocketServerManager | null = null;
 
 // Middleware
 app.use(helmet());
-app.use(cors({
-  origin: env.CORS_ORIGINS.split(','),
-  credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-Request-ID'],
-}));
+app.use(cors(corsConfig));
 app.use(morgan('combined', { stream: { write: (msg: string) => logger.info(msg.trim()) } }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
