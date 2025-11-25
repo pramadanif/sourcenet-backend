@@ -698,56 +698,6 @@ const exists = await StorageService.verifyFileExists(blobId);
 
 ---
 
-#### 5. Blockchain Indexer Flow
-
-```
-┌──────────────────┐
-│  Sui Blockchain  │
-│  Event Query     │
-└────┬─────────────┘
-     │ 2. Query events since last checkpoint:
-     │    - DataPodCreated
-     │    - DataPodPublished
-     │    - PurchaseCreated
-     │    - PurchaseCompleted
-     │    - EscrowReleased
-     │
-     ▼
-┌──────────────────┐
-│  Indexer Service │
-└────┬─────────────┘
-     │ 3. Parse events and extract data
-     │
-     │ 4. Process each event type:
-     │
-     ├─ DataPodPublished ──▶ Update DataPod status
-     │
-     ├─ PurchaseCreated ───▶ Create PurchaseRequest
-     │
-     ├─ PurchaseCompleted ─▶ Update status, trigger job
-     │
-     └─ EscrowReleased ────▶ Update EscrowTransaction
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│ IndexerCheckpoint│
-└────┬─────────────┘
-     │ 5. Update checkpoint:
-     │    - Last processed block
-     │    - Last processed transaction
-     │    - Timestamp
-     │
-     ▼
-┌──────────────────┐
-│  WebSocket       │
-└────┬─────────────┘
-     │ 6. Broadcast updates to connected clients
-     │
-     ▼
-   LOOP (repeat every 5s)
-```
-
 **Key Steps:**
 1. Continuous polling of blockchain events
 2. Event parsing and data extraction
