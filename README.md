@@ -72,7 +72,7 @@ SourceNet follows a microservices-oriented architecture:
 
 ## 🤖 AI Integration
 
-SourceNet integrates **AI-powered assistance** using **OpenAI GPT-4** (via OpenRouter) to help users navigate the platform, understand DataPods, and make informed decisions.
+SourceNet integrates **AI-powered assistance** using **Deepseek V3** (via OpenRouter) to help users navigate the platform, understand DataPods, and make informed decisions.
 
 ### Key Features
 
@@ -2254,7 +2254,7 @@ This project is licensed under the **MIT License**.
 ```
 MIT License
 
-Copyright (c) 2024 SourceNet
+Copyright (c) 2025 SourceNet
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -2267,10 +2267,7 @@ in the Software without restriction...
 
 For questions or issues:
 
-- 📧 Email: support@sourcenet.io
-- 💬 Discord: [Join our community](https://discord.gg/sourcenet)
-- 🐛 Issues: [GitHub Issues](https://github.com/sourcenet/backend/issues)
-- 📚 Docs: [Read the Docs](https://docs.sourcenet.io)
+- 📧 Email: husseinrian@gmail.com
 
 ---
 
