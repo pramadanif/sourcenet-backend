@@ -1,270 +1,2047 @@
-# SourceNet Backend
+# SourceNet - Decentralized Data Marketplace
 
-Decentralized Data Marketplace Backend - Powered by Sui Blockchain
+SourceNet is a decentralized data marketplace built on **Sui Blockchain** with **Walrus Protocol** for secure, decentralized data storage. This platform enables data sellers to monetize their datasets and buyers to securely purchase and access data through blockchain-powered escrow and encryption.
 
-## Tech Stack
+---
 
-- **Runtime**: Node.js 18+
-- **Language**: TypeScript 5.3+
-- **Framework**: Express.js 4.18+
-- **Database**: PostgreSQL 15 (with Prisma ORM)
-- **Cache**: Redis 7
-- **Job Queue**: BullMQ
-- **Blockchain**: Sui Network
-- **Storage**: AWS S3 + Walrus Protocol
-- **Real-time**: WebSocket (ws)
-- **Validation**: Zod
-- **Security**: Helmet, CORS, Rate Limiting
-- **Logging**: Winston + Morgan
-- **Testing**: Jest + ts-jest
-- **Linting**: ESLint + Prettier
-- **Cryptography**: TweetNaCl, libsodium, @noble/hashes
+## 📑 Table of Contents
 
-## Project Structure
+### Backend
+- [🌐 Architecture Overview](#-architecture-overview)
+- [🔄 Technical Flows](#-technical-flows)
+- [🛠️ Tech Stack](#️-tech-stack)
+- [⚙️ Prerequisites](#️-prerequisites)
+- [📦 Installation](#-installation)
+- [🔐 Environment Variables](#-environment-variables)
+- [🚀 Running the Application](#-running-the-application)
+- [📊 Database Schema](#-database-schema)
+- [🔌 API Endpoints](#-api-endpoints)
+- [🔄 WebSocket Events](#-websocket-events)
+- [🔒 Security](#-security)
+
+### Smart Contracts
+- [⛓️ Smart Contracts Overview](#️-smart-contracts-overview)
+- [🔁 Smart Contract Flows](#-smart-contract-flows)
+- [📝 Contract Modules](#-contract-modules)
+- [🏗️ Building & Testing](#️-building--testing)
+- [🚢 Deployment](#-deployment)
+
+### Development
+- [🧪 Testing](#-testing)
+- [📝 Contributing](#-contributing)
+- [📄 License](#-license)
+
+---
+
+## 🌐 Architecture Overview
+
+SourceNet follows a microservices-oriented architecture:
 
 ```
-src/
-├── config/           - Configuration setup (env, database, redis, etc.)
-├── middleware/       - Express middleware (auth, error handling, logging)
-├── routes/           - API route definitions
-├── controllers/      - Request handlers and business logic orchestration
-├── services/         - Core business logic and external service integration
-├── jobs/             - Background job definitions (BullMQ)
-├── websocket/        - WebSocket handlers for real-time updates
-├── types/            - TypeScript interfaces and types
-├── utils/            - Utility functions and helpers
-├── indexer/          - Blockchain event indexer and syncer
-└── main.ts           - Application entry point
-
-Root Configuration Files:
-├── tsconfig.json     - TypeScript compiler configuration
-├── eslint.config.json - ESLint rules and configuration
-├── prettier.config.json - Code formatting rules
-├── docker-compose.yml - Local development services
-├── .env.example      - Environment variables template
-└── package.json      - Project dependencies and scripts
+┌─────────────┐         ┌──────────────┐         ┌───────────────┐
+│   Frontend  │────────▶│    Backend   │────────▶│  Sui Blockchain│
+│  (Next.js)  │         │  (Express)   │         │   (Move SC)    │
+└─────────────┘         └──────────────┘         └───────────────┘
+                              │    │
+                              │    │
+                         ┌────▼────▼────┐
+                         │  PostgreSQL   │
+                         │    + Redis    │
+                         └───────────────┘
+                              │
+                         ┌────▼────┐
+                         │ Walrus  │
+                         │ Storage │
+                         └─────────┘
 ```
 
-## Getting Started
+### Key Components
 
-### Prerequisites
+1. **Backend API** - Express.js server handling REST endpoints
+2. **Database** - PostgreSQL for data persistence
+3. **Cache Layer** - Redis for caching and rate limiting
+4. **Blockchain Integration** - Sui Move smart contracts for escrow & data ownership
+5. **Storage Layer** - Walrus Protocol for decentralized file storage
+6. **Real-time Layer** - WebSocket for live updates
+7. **Job Queue** - BullMQ for background processing
+8. **Indexer** - Blockchain event listener and synchronizer
 
-- Node.js 18+
-- npm or yarn
-- Docker & Docker Compose (optional)
-- PostgreSQL 15 (or use Docker)
-- Redis 7 (or use Docker)
+---
 
-### Installation
+## 🔄 Technical Flows
 
-1. **Clone repository**
+### Backend Technical Flows
+
+#### 1. Seller Data Upload & Publish Flow
+
+```
+┌─────────┐
+│ Seller  │
+└────┬────┘
+     │
+     │ 1. POST /api/seller/upload (file, metadata)
+     ▼
+┌──────────────────┐
+│  Backend API     │
+│ uploadController │
+└────┬─────────────┘
+     │
+     │ 2. Validate file & metadata (Zod schema)
+     │ 3. Generate data hash (SHA-256)
+     │ 4. Encrypt file with random symmetric key
+     │
+     ▼
+┌──────────────────┐
+│  Walrus Storage  │
+└────┬─────────────┘
+     │ 5. Upload encrypted file → Returns blob_id
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│  UploadStaging   │
+└────┬─────────────┘
+     │ 6. Store staging data:
+     │    - sellerId
+     │    - filePath (Walrus blob_id)
+     │    - dataHash
+     │    - metadata
+     │    - status: "pending"
+     │
+     ▼
+     Return staging_id to Seller
+     
+     │ 7. Seller reviews and confirms
+     │
+     │ 8. POST /api/seller/publish
+     ▼
+┌──────────────────┐
+│  Backend API     │
+│ publishController│
+└────┬─────────────┘
+     │
+     │ 9. Prepare blockchain transaction
+     │
+     ▼
+┌──────────────────┐
+│  Sui Blockchain  │
+│  datapod::create │
+└────┬─────────────┘
+     │ 10. Create DataPod object on-chain
+     │     - Returns datapod_id (object address)
+     │     - Event: DataPodCreated
+     │
+     ▼
+┌──────────────────┐
+│  Backend API     │
+└────┬─────────────┘
+     │ 11. Sponsor gas & submit transaction
+     │     - Returns tx_digest
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│  DataPod         │
+└────┬─────────────┘
+     │ 12. Insert DataPod record:
+     │     - datapodId (on-chain)
+     │     - sellerId
+     │     - title, description, category
+     │     - priceSui
+     │     - dataHash
+     │     - blobId (Walrus)
+     │     - status: "published"
+     │
+     ▼
+┌──────────────────┐
+│  WebSocket       │
+└────┬─────────────┘
+     │ 13. Broadcast event:
+     │     - type: "datapod.published"
+     │     - data: { datapodId, title, category, price }
+     │
+     ▼
+   SUCCESS
+```
+
+**Key Steps:**
+1. File validation and encryption
+2. Upload to Walrus decentralized storage
+3. Create staging record in database
+4. Create on-chain DataPod object
+5. Gas sponsorship by backend
+6. Database record creation
+7. Real-time WebSocket broadcast
+
+---
+
+#### 2. Buyer Purchase Flow
+
+```
+┌─────────┐
+│ Buyer   │
+└────┬────┘
+     │
+     │ 1. POST /api/buyer/purchase
+     │    { datapodId, buyerPublicKey }
+     ▼
+┌──────────────────┐
+│  Backend API     │
+│ purchaseController│
+└────┬─────────────┘
+     │
+     │ 2. Validate datapod exists & published
+     │ 3. Check buyer hasn't already purchased
+     │ 4. Generate purchase_id (UUID)
+     │
+     ▼
+┌──────────────────┐
+│  Sui Blockchain  │
+│ purchase::create │
+└────┬─────────────┘
+     │ 5. Create PurchaseRequest on-chain
+     │    - purchaseId
+     │    - datapodId
+     │    - buyer address
+     │    - seller address
+     │    - buyerPublicKey
+     │    - priceSui
+     │    - Event: PurchaseCreated
+     │
+     ▼
+┌──────────────────┐
+│  Sui Blockchain  │
+│  escrow::create  │
+└────┬─────────────┘
+     │ 6. Create Escrow object
+     │    - Lock buyer's SUI tokens
+     │    - Returns escrow_id
+     │    - Event: EscrowCreated
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│ PurchaseRequest  │
+└────┬─────────────┘
+     │ 7. Insert PurchaseRequest:
+     │    - purchaseRequestId (on-chain)
+     │    - datapodId
+     │    - buyerId
+     │    - buyerAddress
+     │    - sellerAddress
+     │    - buyerPublicKey
+     │    - priceSui
+     │    - status: "pending"
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│ EscrowTransaction│
+└────┬─────────────┘
+     │ 8. Insert EscrowTransaction:
+     │    - purchaseRequestId
+     │    - sellerId
+     │    - amountSui
+     │    - escrowObjectId (on-chain)
+     │    - status: "holding"
+     │
+     ▼
+┌──────────────────┐
+│  BullMQ          │
+│  Fulfillment Job │
+└────┬─────────────┘
+     │ 9. Queue fulfillment job:
+     │    - purchaseRequestId
+     │    - Job processes in background
+     │
+     ▼
+┌──────────────────┐
+│  Job Worker      │
+└────┬─────────────┘
+     │ 10. Fetch encrypted file from Walrus
+     │ 11. Re-encrypt with buyer's public key
+     │ 12. Upload re-encrypted file to Walrus
+     │     - Returns encrypted_blob_id
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│ PurchaseRequest  │
+└────┬─────────────┘
+     │ 13. Update PurchaseRequest:
+     │     - encryptedBlobId
+     │     - decryptionKey (encrypted for buyer)
+     │     - status: "completed"
+     │     - completedAt: NOW()
+     │
+     ▼
+┌──────────────────┐
+│  Sui Blockchain  │
+│ purchase::       │
+│   complete       │
+└────┬─────────────┘
+     │ 14. Mark purchase as completed on-chain
+     │     - Event: PurchaseCompleted
+     │
+     ▼
+┌──────────────────┐
+│  Sui Blockchain  │
+│ escrow::release  │
+└────┬─────────────┘
+     │ 15. Release escrow to seller
+     │     - Transfer SUI to seller address
+     │     - Event: EscrowReleased
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│ EscrowTransaction│
+└────┬─────────────┘
+     │ 16. Update EscrowTransaction:
+     │     - status: "released"
+     │     - releasedAt: NOW()
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│  DataPod         │
+└────┬─────────────┘
+     │ 17. Update DataPod:
+     │     - totalSales++
+     │
+     ▼
+┌──────────────────┐
+│  WebSocket       │
+└────┬─────────────┘
+     │ 18. Notify buyer:
+     │     - type: "purchase.completed"
+     │     - Buyer can now download
+     │
+     ▼
+   SUCCESS
+```
+
+**Key Steps:**
+1. Purchase validation and creation
+2. Escrow creation (locks buyer's funds)
+3. Background job for data re-encryption
+4. Re-encryption with buyer's public key
+5. On-chain purchase completion
+6. Escrow release to seller
+7. Database updates and notifications
+
+---
+
+#### 3. Data Download Flow
+
+```
+┌─────────┐
+│ Buyer   │
+└────┬────┘
+     │
+     │ 1. GET /api/buyer/download/:purchaseId
+     │    Headers: Authorization: Bearer <JWT>
+     ▼
+┌──────────────────┐
+│  Backend API     │
+│ downloadController│
+└────┬─────────────┘
+     │
+     │ 2. Verify JWT & extract userId
+     │ 3. Validate purchase belongs to buyer
+     │ 4. Check purchase status === "completed"
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│ PurchaseRequest  │
+└────┬─────────────┘
+     │ 5. Fetch:
+     │    - encryptedBlobId
+     │    - decryptionKey (encrypted)
+     │
+     ▼
+┌──────────────────┐
+│  Walrus Storage  │
+└────┬─────────────┘
+     │ 6. Fetch encrypted file by blob_id
+     │
+     ▼
+┌──────────────────┐
+│  Backend API     │
+└────┬─────────────┘
+     │ 7. Stream file to buyer with headers:
+     │    - Content-Disposition: attachment
+     │    - X-Decryption-Key: <encrypted_key>
+     │
+     ▼
+┌─────────┐
+│ Buyer   │
+└────┬────┘
+     │ 8. Decrypt file client-side:
+     │    - Use buyer's private key to decrypt encryption key
+     │    - Use decrypted key to decrypt file
+     │
+     ▼
+   Original Data
+```
+
+**Key Steps:**
+1. Authentication and authorization
+2. Purchase validation
+3. Fetch encrypted file from Walrus
+4. Stream to buyer with decryption key
+5. Client-side decryption
+
+---
+
+#### 4. Review Submission Flow
+
+```
+┌─────────┐
+│ Buyer   │
+└────┬────┘
+     │
+     │ 1. POST /api/review
+     │    { purchaseRequestId, rating, comment }
+     ▼
+┌──────────────────┐
+│  Backend API     │
+│ reviewController │
+└────┬─────────────┘
+     │
+     │ 2. Validate:
+     │    - Purchase exists & completed
+     │    - Buyer owns purchase
+     │    - No existing review
+     │    - Rating in range 1-5
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│  Review          │
+└────┬─────────────┘
+     │ 3. Insert Review:
+     │    - datapodId
+     │    - purchaseRequestId
+     │    - buyerId
+     │    - buyerAddress
+     │    - rating
+     │    - comment
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│  DataPod         │
+└────┬─────────────┘
+     │ 4. Recalculate DataPod averageRating:
+     │    - SELECT AVG(rating) FROM reviews
+     │    - UPDATE data_pods SET average_rating = ?
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│  User (Seller)   │
+└────┬─────────────┘
+     │ 5. Recalculate Seller averageRating:
+     │    - Average across all seller's datapods
+     │    - UPDATE users SET average_rating = ?
+     │
+     ▼
+┌──────────────────┐
+│  WebSocket       │
+└────┬─────────────┘
+     │ 6. Broadcast:
+     │    - type: "review.created"
+     │    - Notify seller
+     │    - Update marketplace
+     │
+     ▼
+   SUCCESS
+```
+
+**Key Steps:**
+1. Review validation
+2. Review insertion
+3. Aggregate rating calculations
+4. Seller rating update
+5. Real-time notifications
+
+---
+
+#### 5. Blockchain Indexer Flow
+
+```
+┌──────────────────┐
+│  Indexer Service │
+│  (Background)    │
+└────┬─────────────┘
+     │
+     │ 1. Poll Sui blockchain every 5s
+     ▼
+┌──────────────────┐
+│  Sui Blockchain  │
+│  Event Query     │
+└────┬─────────────┘
+     │ 2. Query events since last checkpoint:
+     │    - DataPodCreated
+     │    - DataPodPublished
+     │    - PurchaseCreated
+     │    - PurchaseCompleted
+     │    - EscrowReleased
+     │
+     ▼
+┌──────────────────┐
+│  Indexer Service │
+└────┬─────────────┘
+     │ 3. Parse events and extract data
+     │
+     │ 4. Process each event type:
+     │
+     ├─ DataPodPublished ──▶ Update DataPod status
+     │
+     ├─ PurchaseCreated ───▶ Create PurchaseRequest
+     │
+     ├─ PurchaseCompleted ─▶ Update status, trigger job
+     │
+     └─ EscrowReleased ────▶ Update EscrowTransaction
+     │
+     ▼
+┌──────────────────┐
+│  PostgreSQL      │
+│ IndexerCheckpoint│
+└────┬─────────────┘
+     │ 5. Update checkpoint:
+     │    - Last processed block
+     │    - Last processed transaction
+     │    - Timestamp
+     │
+     ▼
+┌──────────────────┐
+│  WebSocket       │
+└────┬─────────────┘
+     │ 6. Broadcast updates to connected clients
+     │
+     ▼
+   LOOP (repeat every 5s)
+```
+
+**Key Steps:**
+1. Continuous polling of blockchain events
+2. Event parsing and data extraction
+3. Database synchronization
+4. Checkpoint tracking
+5. Real-time WebSocket broadcasts
+
+---
+
+## 🔁 Smart Contract Flows
+
+### Smart Contract Technical Flows
+
+#### 1. DataPod Creation & Publishing Flow
+
+```move
+// Step 1: Create DataPod (Draft)
+┌─────────────────────────────────────────────────────┐
+│ sourcenet::datapod::create_datapod()                 │
+└────┬────────────────────────────────────────────────┘
+     │
+     │ Inputs:
+     │  - datapod_id: String
+     │  - title: String
+     │  - category: String
+     │  - description: String
+     │  - price_sui: u64
+     │  - data_hash: String
+     │  - blob_id: String (Walrus)
+     │  - ctx: &mut TxContext
+     │
+     ▼
+   Validations:
+     │  - assert!(price_sui > 0)
+     │
+     ▼
+   Create Objects:
+     ├─ DataPod {
+     │    id: new_uid(),
+     │    seller: tx_sender(),
+     │    status: 0, // draft
+     │    ...
+     │  }
+     │
+     └─ DataPodOwnerCap {
+          id: new_uid(),
+          datapod_id: datapod_address
+        }
+     │
+     ▼
+   Emit Event:
+     │  - DataPodCreated {
+     │      datapod_id,
+     │      seller,
+     │      title,
+     │      category,
+     │      price_sui
+     │    }
+     │
+     ▼
+   Transfer:
+     │  - transfer::transfer(datapod, sender)
+     │  - transfer::transfer(cap, sender)
+     │
+     ▼
+   RESULT: DataPod created in DRAFT status
+
+// Step 2: Publish DataPod
+┌─────────────────────────────────────────────────────┐
+│ sourcenet::datapod::publish_datapod()                │
+└────┬────────────────────────────────────────────────┘
+     │
+     │ Inputs:
+     │  - datapod: &mut DataPod
+     │  - kiosk_id: String
+     │  - cap: &DataPodOwnerCap
+     │  - ctx: &mut TxContext
+     │
+     ▼
+   Validations:
+     │  - assert!(datapod.status == 0 || datapod.status == 2)
+     │  - assert!(cap.datapod_id == datapod.id)
+     │
+     ▼
+   Update DataPod:
+     │  - datapod.status = 1 // published
+     │  - datapod.kiosk_id = kiosk_id
+     │  - datapod.published_at = tx_epoch()
+     │
+     ▼
+   Emit Event:
+     │  - DataPodPublished {
+     │      datapod_id,
+     │      seller,
+     │      title,
+     │      category,
+     │      price_sui,
+     │      kiosk_id
+     │    }
+     │
+     ▼
+   RESULT: DataPod is now PUBLISHED in marketplace
+```
+
+---
+
+#### 2. Purchase & Escrow Flow
+
+```move
+// Step 1: Create Purchase Request
+┌─────────────────────────────────────────────────────┐
+│ sourcenet::purchase::create_purchase()               │
+└────┬────────────────────────────────────────────────┘
+     │
+     │ Inputs:
+     │  - purchase_id: String
+     │  - datapod_id: String
+     │  - buyer: address
+     │  - seller: address
+     │  - buyer_public_key: String
+     │  - price_sui: u64
+     │  - data_hash: String
+     │  - ctx: &mut TxContext
+     │
+     ▼
+   Validations:
+     │  - assert!(price_sui > 0)
+     │
+     ▼
+   Create Objects:
+     ├─ PurchaseRequest {
+     │    id: new_uid(),
+     │    buyer,
+     │    seller,
+     │    status: 0, // pending
+     │    ...
+     │  }
+     │
+     └─ PurchaseOwnerCap {
+          id: new_uid(),
+          purchase_id: purchase_address
+        }
+     │
+     ▼
+   Emit Event:
+     │  - PurchaseCreated {
+     │      purchase_id,
+     │      datapod_id,
+     │      buyer,
+     │      seller,
+     │      price_sui
+     │    }
+     │
+     ▼
+   Return:
+     │  - (PurchaseRequest, PurchaseOwnerCap)
+     │
+     ▼
+   RESULT: Purchase request created
+
+// Step 2: Create Escrow (Lock Funds)
+┌─────────────────────────────────────────────────────┐
+│ sourcenet::escrow::create_escrow()                   │
+└────┬────────────────────────────────────────────────┘
+     │
+     │ Inputs:
+     │  - purchase_id: String
+     │  - buyer: address
+     │  - seller: address
+     │  - data_hash: String
+     │  - coin: Coin<SUI> // buyer's payment
+     │  - ctx: &mut TxContext
+     │
+     ▼
+   Validations:
+     │  - let amount = coin::value(&coin)
+     │  - assert!(amount > 0)
+     │
+     ▼
+   Convert Coin to Balance:
+     │  - let balance = coin::into_balance(coin)
+     │
+     ▼
+   Create Objects:
+     ├─ Escrow {
+     │    id: new_uid(),
+     │    buyer,
+     │    seller,
+     │    amount,
+     │    status: 0, // pending
+     │    balance, // FUNDS LOCKED HERE
+     │    ...
+     │  }
+     │
+     └─ EscrowOwnerCap {
+          id: new_uid(),
+          escrow_id: escrow_address
+        }
+     │
+     ▼
+   Emit Event:
+     │  - EscrowCreated {
+     │      escrow_id,
+     │      purchase_id,
+     │      buyer,
+     │      seller,
+     │      amount
+     │    }
+     │
+     ▼
+   Return:
+     │  - (Escrow, EscrowOwnerCap)
+     │
+     ▼
+   RESULT: Funds LOCKED in escrow
+
+// Step 3: Complete Purchase
+┌─────────────────────────────────────────────────────┐
+│ sourcenet::purchase::complete_purchase()             │
+└────┬────────────────────────────────────────────────┘
+     │
+     │ Inputs:
+     │  - purchase: &mut PurchaseRequest
+     │  - cap: &PurchaseOwnerCap
+     │  - ctx: &mut TxContext
+     │
+     ▼
+   Validations:
+     │  - assert!(purchase.status == 0) // pending
+     │  - assert!(cap.purchase_id == purchase.id)
+     │
+     ▼
+   Update Purchase:
+     │  - purchase.status = 1 // completed
+     │  - purchase.completed_at = tx_epoch()
+     │
+     ▼
+   Emit Event:
+     │  - PurchaseCompleted {
+     │      purchase_id,
+     │      buyer,
+     │      seller,
+     │      price_sui
+     │    }
+     │
+     ▼
+   RESULT: Purchase marked as completed
+
+// Step 4: Release Escrow (Pay Seller)
+┌─────────────────────────────────────────────────────┐
+│ sourcenet::escrow::release_escrow()                  │
+└────┬────────────────────────────────────────────────┘
+     │
+     │ Inputs:
+     │  - escrow: &mut Escrow
+     │  - seller_address: address
+     │  - ctx: &mut TxContext
+     │
+     ▼
+   Validations:
+     │  - assert!(escrow.status == 0) // pending
+     │
+     ▼
+   Update Escrow:
+     │  - escrow.status = 1 // released
+     │
+     ▼
+   Transfer Funds:
+     │  - let amount = escrow.amount
+     │  - let coin = coin::from_balance(
+     │        balance::split(&mut escrow.balance, amount),
+     │        ctx
+     │    )
+     │  - transfer::public_transfer(coin, seller_address)
+     │
+     ▼
+   Emit Event:
+     │  - EscrowReleased {
+     │      escrow_id,
+     │      seller,
+     │      amount
+     │    }
+     │
+     ▼
+   RESULT: Funds transferred to seller
+```
+
+**Critical Security Points:**
+1. **Escrow Holding**: Funds are locked in `Escrow.balance` until release/refund
+2. **Capability Verification**: All mutations require ownership capability proof
+3. **Status Checks**: Prevents double-spending and invalid state transitions
+4. **Event Emission**: All state changes emit events for indexer tracking
+5. **Atomic Operations**: All operations are atomic (succeed or fail completely)
+
+---
+
+#### 3. Refund Flow (Dispute/Cancellation)
+
+```move
+// Refund Purchase
+┌─────────────────────────────────────────────────────┐
+│ sourcenet::purchase::refund_purchase()               │
+└────┬────────────────────────────────────────────────┘
+     │
+     │ Inputs:
+     │  - purchase: &mut PurchaseRequest
+     │  - cap: &PurchaseOwnerCap
+     │
+     ▼
+   Validations:
+     │  - assert!(purchase.status == 0) // must be pending
+     │  - assert!(cap.purchase_id == purchase.id)
+     │
+     ▼
+   Update Purchase:
+     │  - purchase.status = 2 // refunded
+     │
+     ▼
+   Emit Event:
+     │  - PurchaseRefunded {
+     │      purchase_id,
+     │      buyer,
+     │      price_sui
+     │    }
+     │
+     ▼
+   RESULT: Purchase marked as refunded
+
+// Refund Escrow
+┌─────────────────────────────────────────────────────┐
+│ sourcenet::escrow::refund_escrow()                   │
+└────┬────────────────────────────────────────────────┘
+     │
+     │ Inputs:
+     │  - escrow: &mut Escrow
+     │  - buyer_address: address
+     │  - ctx: &mut TxContext
+     │
+     ▼
+   Validations:
+     │  - assert!(escrow.status == 0) // pending
+     │
+     ▼
+   Update Escrow:
+     │  - escrow.status = 2 // refunded
+     │
+     ▼
+   Transfer Funds BACK to Buyer:
+     │  - let amount = escrow.amount
+     │  - let coin = coin::from_balance(
+     │        balance::split(&mut escrow.balance, amount),
+     │        ctx
+     │    )
+     │  - transfer::public_transfer(coin, buyer_address)
+     │
+     ▼
+   Emit Event:
+     │  - EscrowRefunded {
+     │      escrow_id,
+     │      buyer,
+     │      amount
+     │    }
+     │
+     ▼
+   RESULT: Funds returned to buyer
+```
+
+---
+
+#### 4. Complete Transaction Flow (Backend + Smart Contract)
+
+```
+┌─────────┐     ┌──────────┐     ┌────────────┐     ┌─────────┐
+│ Buyer   │     │ Backend  │     │ Blockchain │     │ Walrus  │
+└────┬────┘     └────┬─────┘     └─────┬──────┘     └────┬────┘
+     │               │                  │                  │
+     │ 1. POST       │                  │                  │
+     │ /purchase     │                  │                  │
+     ├──────────────▶│                  │                  │
+     │               │                  │                  │
+     │               │ 2. create_purchase()                │
+     │               ├─────────────────▶│                  │
+     │               │                  │                  │
+     │               │ 3. PurchaseRequest                  │
+     │               │    created                          │
+     │               │◀─────────────────┤                  │
+     │               │                  │                  │
+     │               │ 4. create_escrow(coin)              │
+     │               ├─────────────────▶│                  │
+     │               │                  │                  │
+     │               │ 5. Escrow created                   │
+     │               │    Funds LOCKED  │                  │
+     │               │◀─────────────────┤                  │
+     │               │                  │                  │
+     │ 6. Purchase   │                  │                  │
+     │    created    │                  │                  │
+     │◀──────────────┤                  │                  │
+     │               │                  │                  │
+     │               │ 7. Queue job     │                  │
+     │               │    (BullMQ)      │                  │
+     │               │                  │                  │
+     │               │ 8. Fetch encrypted file             │
+     │               ├────────────────────────────────────▶│
+     │               │                  │                  │
+     │               │ 9. Encrypted data                   │
+     │               │◀────────────────────────────────────┤
+     │               │                  │                  │
+     │               │ 10. Re-encrypt   │                  │
+     │               │     with buyer   │                  │
+     │               │     public key   │                  │
+     │               │                  │                  │
+     │               │ 11. Upload re-encrypted             │
+     │               ├────────────────────────────────────▶│
+     │               │                  │                  │
+     │               │ 12. Return blob_id                  │
+     │               │◀────────────────────────────────────┤
+     │               │                  │                  │
+     │               │ 13. complete_purchase()             │
+     │               ├─────────────────▶│                  │
+     │               │                  │                  │
+     │               │ 14. Purchase status = completed     │
+     │               │◀─────────────────┤                  │
+     │               │                  │                  │
+     │               │ 15. release_escrow()                │
+     │               ├─────────────────▶│                  │
+     │               │                  │                  │
+     │               │ 16. Transfer SUI                    │
+     │               │     to seller    │                  │
+     │               │◀─────────────────┤                  │
+     │               │                  │                  │
+     │ 17. WebSocket │                  │                  │
+     │     notify    │                  │                  │
+     │◀──────────────┤                  │                  │
+     │               │                  │                  │
+     │ 18. GET       │                  │                  │
+     │ /download     │                  │                  │
+     ├──────────────▶│                  │                  │
+     │               │                  │                  │
+     │               │ 19. Fetch encrypted file            │
+     │               ├────────────────────────────────────▶│
+     │               │                  │                  │
+     │               │ 20. Stream file                     │
+     │               │◀────────────────────────────────────┤
+     │               │                  │                  │
+     │ 21. File +    │                  │                  │
+     │     decrypt   │                  │                  │
+     │     key       │                  │                  │
+     │◀──────────────┤                  │                  │
+     │               │                  │                  │
+     │ 22. Decrypt   │                  │                  │
+     │     on client │                  │                  │
+     │               │                  │                  │
+     ▼               ▼                  ▼                  ▼
+  SUCCESS         SUCCESS            SUCCESS            SUCCESS
+```
+
+**Transaction Stages:**
+1. **Request** - Buyer initiates purchase
+2. **Lock** - Funds locked in escrow on-chain
+3. **Process** - Background job re-encrypts data
+4. **Complete** - On-chain completion marker
+5. **Release** - Funds transferred to seller
+6. **Deliver** - Buyer downloads encrypted data
+7. **Decrypt** - Client-side decryption
+
+
+
+## 🛠️ Tech Stack
+
+### Backend Technologies
+
+| Category | Technology | Version | Purpose |
+|----------|-----------|---------|---------|
+| **Runtime** | Node.js | 18+ | JavaScript runtime |
+| **Language** | TypeScript | 5.3+ | Type-safe development |
+| **Framework** | Express.js | 4.18+ | Web framework |
+| **Database** | PostgreSQL | 15+ | Primary database |
+| **ORM** | Prisma | 5.4+ | Database toolkit |
+| **Cache** | Redis | 7+ | Caching & sessions |
+| **Queue** | BullMQ | 4.10+ | Job processing |
+| **Blockchain** | @mysten/sui | 1.9+ | Sui SDK |
+| **Storage** | Walrus | 0.3+ | Decentralized storage |
+| **WebSocket** | ws | 8.14+ | Real-time communication |
+| **Validation** | Zod | 3.22+ | Schema validation |
+| **Crypto** | TweetNaCl, libsodium | - | Encryption |
+| **Security** | Helmet, CORS | - | HTTP security |
+| **Logging** | Winston | 3.11+ | Application logging |
+| **Testing** | Jest | 29.5+ | Unit testing |
+
+---
+
+## ⚙️ Prerequisites
+
+Before you begin, ensure you have installed:
+
+- **Node.js** v18.0.0 or higher
+- **npm** v9.0.0 or higher
+- **Docker** and **Docker Compose** (for local services)
+- **PostgreSQL Client** (optional, for debugging)
+- **Sui CLI** (for smart contract deployment)
+
+---
+
+## 📦 Installation
+
+### 1. Clone the Repository
+
 ```bash
-git clone https://github.com/yourusername/sourcenet-backend.git
+git clone <repository-url>
 cd sourcenet-backend
 ```
 
-2. **Install dependencies**
+### 2. Install Dependencies
+
 ```bash
 npm install
 ```
 
-3. **Setup environment variables**
-```bash
-cp .env.example .env.local
-# Edit .env.local with your configuration values
-```
+### 3. Start Infrastructure Services
 
-4. **Start Docker services** (PostgreSQL, Redis, LocalStack S3)
+Using Docker Compose to start PostgreSQL and Redis:
+
 ```bash
 npm run docker:up
-# or
+# OR
 docker-compose up -d
 ```
 
-5. **Setup database**
+Verify services are running:
 ```bash
-npm run db:push        # Push schema to database
-npm run db:migrate     # Run migrations
+docker ps
 ```
 
-6. **Start development server**
+### 4. Configure Environment
+
+Copy the example environment file and update values:
+
 ```bash
+cp .env.example .env
+```
+
+Edit `.env` with your configuration (see Environment Variables section).
+
+### 5. Initialize Database
+
+```bash
+# Push Prisma schema to database
+npm run db:push
+
+# Run migrations (if any)
+npm run db:migrate
+
+# (Optional) Seed initial data
+npm run db:seed
+```
+
+### 6. Start the Application
+
+```bash
+# Development mode (with hot reload)
 npm run dev
+
+# Production mode
+npm run build
+npm start
 ```
 
-Server running at: `http://localhost:3001`
-WebSocket running at: `ws://localhost:3002`
+The server will start on `http://localhost:3001`.
 
-## Available Scripts
+---
 
-### Development
-- `npm run dev` - Start development server with hot reload
-- `npm run indexer:dev` - Start blockchain indexer service
+## 🔐 Environment Variables
 
-### Building & Running
-- `npm run build` - Compile TypeScript to JavaScript
-- `npm start` - Run production build
+### Complete Environment Configuration
 
-### Code Quality
-- `npm run lint` - Run ESLint to check code quality
-- `npm run format` - Format code with Prettier
-- `npm test` - Run test suite with Jest
+Create a `.env` file in the root directory:
 
-### Database
-- `npm run db:push` - Push Prisma schema to database
-- `npm run db:migrate` - Create and run database migrations
-- `npm run db:seed` - Seed database with initial data
+#### **Server Configuration**
+```env
+NODE_ENV=development                    # development | staging | production
+PORT=3001                                # API server port
+API_BASE_URL=http://localhost:3001      # Public API URL
+API_NAME=SourceNet Backend
+API_VERSION=1.0.0
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001  # Comma-separated allowed origins
+```
 
-### Docker
-- `npm run docker:up` - Start all Docker services
-- `npm run docker:down` - Stop all Docker services
+#### **Database Configuration**
+```env
+DATABASE_URL=postgresql://user:password@localhost:5432/sourcenet?schema=public
+DATABASE_DIRECT_URL=postgresql://user:password@localhost:5432/sourcenet
+DATABASE_POOL_MAX=20
+DATABASE_POOL_MIN=2
+```
 
-## Environment Variables
+#### **Redis Configuration**
+```env
+REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=                     # Leave empty if no password
+REDIS_DB=0
+```
 
-See `.env.example` for all available variables. Key sections:
+#### **Sui Blockchain Configuration**
+```env
+SUI_RPC_URL=https://fullnode.testnet.sui.io:443
+SUI_NETWORK=testnet                 # testnet | mainnet | devnet
+SUI_SPONSOR_ADDRESS=0x...           # Your sponsor wallet address
+SUI_SPONSOR_PRIVATE_KEY=           # Private key for gas sponsorship
+SOURCENET_PACKAGE_ID=0x...         # Deployed smart contract package ID
+```
 
-### Server Configuration
-- `NODE_ENV` - Environment (development/staging/production)
-- `PORT` - API server port (default: 3001)
-- `API_BASE_URL` - Public API URL
+#### **Walrus Storage Configuration**
+```env
+WALRUS_API_URL=https://walrus-testnet.mystenlabs.com
+WALRUS_BLOB_ENDPOINT=https://blobstore.walrus-testnet.mystenlabs.com
+```
 
-### Database & Cache
-- `DATABASE_URL` - PostgreSQL connection string
-- `DATABASE_POOL_MAX` - Connection pool size
-- `REDIS_URL` - Redis connection URL
+#### **WebSocket Configuration**
+```env
+WS_PORT=3002
+WS_URL=ws://localhost:3002
+```
 
-### Blockchain (Sui)
-- `SUI_RPC_URL` - Sui blockchain RPC endpoint
-- `SUI_NETWORK` - Network (testnet/mainnet)
-- `SUI_SPONSOR_ADDRESS` - Sponsor address for transactions
-- `SUI_SPONSOR_PRIVATE_KEY` - Sponsor private key
-- `SOURCENET_PACKAGE_ID` - SourceNet smart contract package ID
+#### **Authentication & Security**
+```env
+JWT_SECRET=your-super-secret-jwt-key-min-32-chars  # CHANGE THIS!
+JWT_EXPIRY=7d
+ZKLOGIN_CLIENT_ID=your-google-oauth-client-id
+ZKLOGIN_REDIRECT_URI=http://localhost:3000/auth/callback
+```
 
-### Storage
-- `AWS_REGION` - AWS region for S3
-- `AWS_ACCESS_KEY_ID` - AWS access key
-- `AWS_SECRET_ACCESS_KEY` - AWS secret key
-- `S3_BUCKET_NAME` - S3 bucket name
-- `S3_ENDPOINT` - S3 endpoint (for LocalStack: http://localhost:4566)
-- `WALRUS_API_URL` - Walrus API endpoint
-- `WALRUS_BLOB_ENDPOINT` - Walrus blob storage endpoint
+#### **AI Integration (Optional)**
+```env
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MAX_TOKENS=1000
+OPENAI_TEMPERATURE=0.7
+```
 
-### Security & Authentication
-- `JWT_SECRET` - JWT signing secret (change in production)
-- `JWT_EXPIRY` - JWT token expiry time
-- `ZKLOGIN_CLIENT_ID` - ZKLogin OAuth client ID
-- `ZKLOGIN_REDIRECT_URI` - ZKLogin redirect URI
+#### **Logging & Monitoring**
+```env
+LOG_LEVEL=info                      # debug | info | warn | error
+SENTRY_DSN=https://...              # Optional: Sentry error tracking
+```
 
-### WebSocket
-- `WS_PORT` - WebSocket server port (default: 3002)
-- `WS_URL` - Public WebSocket URL
+---
 
-### Logging & Monitoring
-- `LOG_LEVEL` - Logging level (debug/info/warn/error)
-- `SENTRY_DSN` - Sentry error tracking DSN
+## 🚀 Running the Application
 
-## API Documentation
+### Available Scripts
 
-See `docs/API.md` for complete API documentation.
+| Script | Command | Description |
+|--------|---------|-------------|
+| **Development** | `npm run dev` | Start with hot-reload |
+| **Production** | `npm start` | Run compiled code |
+| **Build** | `npm run build` | Compile TypeScript |
+| **Indexer** | `npm run indexer:dev` | Start blockchain indexer |
+| **Database Push** | `npm run db:push` | Push schema to DB |
+| **Database Migrate** | `npm run db:migrate` | Run migrations |
+| **Database Seed** | `npm run db:seed` | Seed initial data |
+| **Database Reset** | `npm run db:reset` | Reset database |
+| **Test** | `npm test` | Run Jest tests |
+| **Lint** | `npm run lint` | Check code quality |
+| **Format** | `npm run format` | Format with Prettier |
+| **Docker Up** | `npm run docker:up` | Start Docker services |
+| **Docker Down** | `npm run docker:down` | Stop Docker services |
 
-## Architecture
-
-### Seller Flow
-1. Upload data → 2. Sign & publish → 3. Data listed on blockchain → 4. Appears in marketplace
-
-### Buyer Flow
-1. Browse marketplace → 2. Purchase → 3. Payment locked in escrow → 4. Seller fulfills → 5. Download & decrypt
-
-### Indexer Flow
-1. Poll blockchain → 2. Parse events → 3. Store in DB → 4. Broadcast to FE via WebSocket
-
-## Security
-
-### Encryption
-- Hybrid encryption: X25519 key exchange + AES-256-GCM for data
-- All sensitive data encrypted at rest
-
-### Authentication & Authorization
-- JWT token-based authentication
-- ZKLogin integration for zero-knowledge proofs
-- Signature verification for blockchain transactions
-- Role-based access control (RBAC)
-
-### API Security
-- Rate limiting on sensitive endpoints
-- CORS protection
-- Helmet.js for HTTP headers
-- Input validation with Zod
-- CSRF protection
-
-### Secrets Management
-- All secrets in environment variables
-- Never commit `.env` files
-- Use `.env.example` as template
-- Rotate secrets regularly in production
-
-## Deployment
-
-### Docker
+### Development Workflow
 
 ```bash
-# Build Docker image
-docker build -f docker/Dockerfile -t sourcenet-backend:latest .
+# 1. Start infrastructure
+npm run docker:up
 
-# Run container
-docker run -p 3001:3001 -p 3002:3002 --env-file .env sourcenet-backend:latest
+# 2. Start backend server (Terminal 1)
+npm run dev
+
+# 3. Start blockchain indexer (Terminal 2)
+npm run indexer:dev
+
+# 4. View logs
+tail -f logs/combined.log
 ```
 
-### Docker Compose (Production)
+---
+
+## 📊 Database Schema
+
+### Entity Relationship Diagram
+
+```
+User (Buyer/Seller)
+  │
+  ├──< DataPods (1:N)
+  ├──< PurchaseRequests (1:N)
+  ├──< Reviews (1:N)
+  ├──< UploadStagings (1:N)
+  ├──< EscrowTransactions (1:N)
+  └──< AiConversations (1:N)
+
+DataPod
+  │
+  ├──< PurchaseRequests (1:N)
+  ├──< Reviews (1:N)
+  └──< UploadStaging (1:1)
+
+PurchaseRequest
+  │
+  ├──< EscrowTransaction (1:1)
+  └──< Review (1:1)
+```
+
+### Core Models
+
+#### **User**
+Stores user profiles for both buyers and sellers.
+
+```typescript
+{
+  id: UUID,
+  zkloginAddress: String (unique),
+  walletAddress: String (unique),
+  googleEmail: String (unique),
+  username: String,
+  bio: String,
+  avatarUrl: String,
+  totalSales: Integer,
+  totalRevenue: Decimal,
+  averageRating: Decimal,
+  reputationScore: Integer,
+  isVerified: Boolean,
+  createdAt: DateTime,
+  updatedAt: DateTime
+}
+```
+
+#### **DataPod**
+Represents a data listing in the marketplace.
+
+```typescript
+{
+  id: UUID,
+  datapodId: String (on-chain ID),
+  sellerId: UUID,
+  title: String,
+  description: Text,
+  category: String,
+  tags: String[],
+  priceSui: Decimal,
+  dataHash: String (unique),
+  totalSales: Integer,
+  averageRating: Decimal,
+  status: String (draft|published|delisted),
+  blobId: String (Walrus ID),
+  kioskId: String (Sui Kiosk ID),
+  publishedAt: DateTime,
+  createdAt: DateTime,
+  updatedAt: DateTime,
+  deletedAt: DateTime (soft delete)
+}
+```
+
+#### **PurchaseRequest**
+Tracks purchase transactions.
+
+```typescript
+{
+  id: UUID,
+  purchaseRequestId: String (on-chain ID),
+  datapodId: UUID,
+  buyerId: UUID,
+  buyerAddress: String,
+  sellerAddress: String,
+  buyerPublicKey: String (for encryption),
+  priceSui: Decimal,
+  status: String (pending|completed|refunded|disputed),
+  encryptedBlobId: String,
+  decryptionKey: String (encrypted),
+  txDigest: String,
+  completedAt: DateTime,
+  createdAt: DateTime,
+  updatedAt: DateTime
+}
+```
+
+#### **Review**
+User ratings for completed purchases.
+
+```typescript
+{
+  id: UUID,
+  datapodId: UUID,
+  purchaseRequestId: UUID (unique),
+  buyerId: UUID,
+  buyerAddress: String,
+  rating: Integer (1-5),
+  comment: Text,
+  createdAt: DateTime
+}
+```
+
+#### **EscrowTransaction**
+Payment escrow tracking.
+
+```typescript
+{
+  id: UUID,
+  purchaseRequestId: UUID (unique),
+  sellerId: UUID,
+  sellerAddress: String,
+  buyerAddress: String,
+  amountSui: Decimal,
+  escrowObjectId: String (Sui object ID),
+  status: String (holding|released|refunded),
+  txDigest: String,
+  releasedAt: DateTime,
+  createdAt: DateTime,
+  updatedAt: DateTime
+}
+```
+
+---
+
+## 🔌 API Endpoints
+
+### Base URL
+```
+http://localhost:3001/api
+```
+
+### API Documentation
+Swagger UI: `http://localhost:3001/api-docs`
+
+### Endpoint Overview
+
+#### **Authentication (`/api/auth`)**
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `POST` | `/auth/zklogin` | ZK Login authentication | No |
+| `POST` | `/auth/verify` | Verify JWT token | No |
+| `GET` | `/auth/profile` | Get user profile | Yes |
+| `PUT` | `/auth/profile` | Update user profile | Yes |
+
+#### **Marketplace (`/api/marketplace`)**
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `GET` | `/marketplace/datapods` | List all published datapods | No |
+| `GET` | `/marketplace/datapods/:id` | Get datapod details | No |
+| `GET` | `/marketplace/categories` | Get all categories | No |
+| `GET` | `/marketplace/search` | Search datapods | No |
+
+**Query Parameters for `/marketplace/datapods`:**
+- `category` - Filter by category
+- `minPrice` - Minimum price (SUI)
+- `maxPrice` - Maximum price (SUI)
+- `sortBy` - Sort field (price, createdAt, rating, sales)
+- `order` - Sort order (asc, desc)
+- `page` - Page number (default: 1)
+- `limit` - Items per page (default: 20)
+
+#### **Seller (`/api/seller`)**
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `POST` | `/seller/upload` | Upload data file | Yes |
+| `POST` | `/seller/publish` | Publish datapod | Yes |
+| `GET` | `/seller/datapods` | Get seller's datapods | Yes |
+| `PUT` | `/seller/datapods/:id` | Update datapod | Yes |
+| `DELETE` | `/seller/datapods/:id` | Delist datapod | Yes |
+| `GET` | `/seller/sales` | Get sales history | Yes |
+| `GET` | `/seller/analytics` | Get seller analytics | Yes |
+
+#### **Buyer (`/api/buyer`)**
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `POST` | `/buyer/purchase` | Initiate purchase | Yes |
+| `GET` | `/buyer/purchases` | Get purchase history | Yes |
+| `GET` | `/buyer/purchases/:id` | Get purchase details | Yes |
+| `POST` | `/buyer/download/:purchaseId` | Download purchased data | Yes |
+
+#### **Review (`/api/review`)**
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `POST` | `/review` | Submit review | Yes |
+| `GET` | `/review/datapod/:id` | Get datapod reviews | No |
+| `GET` | `/review/my-reviews` | Get user's reviews | Yes |
+| `DELETE` | `/review/:id` | Delete review | Yes |
+
+#### **AI Chat (`/api/ai`)**
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `POST` | `/ai/chat` | Send chat message | Yes |
+| `GET` | `/ai/conversations` | List conversations | Yes |
+| `GET` | `/ai/conversations/:id` | Get conversation | Yes |
+| `DELETE` | `/ai/conversations/:id` | Delete conversation | Yes |
+
+#### **Health (`/api/health`)**
+
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `GET` | `/health` | Health check | No |
+| `GET` | `/health/db` | Database health | No |
+| `GET` | `/health/redis` | Redis health | No |
+| `GET` | `/health/blockchain` | Blockchain connection | No |
+
+---
+
+## 🔄 WebSocket Events
+
+Connect to: `ws://localhost:3002`
+
+### Event Types
+
+#### **Client → Server**
+
+```typescript
+// Subscribe to datapod updates
+{
+  type: 'subscribe',
+  channel: 'datapod',
+  id: 'datapod-uuid'
+}
+
+// Subscribe to user updates
+{
+  type: 'subscribe',
+  channel: 'user',
+  id: 'user-address'
+}
+
+// Subscribe to marketplace updates
+{
+  type: 'subscribe',
+  channel: 'marketplace'
+}
+```
+
+#### **Server → Client**
+
+```typescript
+// New datapod published
+{
+  type: 'datapod.published',
+  data: {
+    id: 'uuid',
+    title: 'Dataset Title',
+    category: 'finance',
+    priceSui: '100',
+    seller: '0x...'
+  }
+}
+
+// Purchase completed
+{
+  type: 'purchase.completed',
+  data: {
+    purchaseId: 'uuid',
+    datapodId: 'uuid',
+    buyer: '0x...',
+    status: 'completed'
+  }
+}
+
+// Review submitted
+{
+  type: 'review.created',
+  data: {
+    datapodId: 'uuid',
+    rating: 5,
+    comment: 'Great data!'
+  }
+}
+```
+
+---
+
+## 🔒 Security
+
+### Authentication Flow
+
+1. **ZK Login** - Zero-knowledge proof authentication via Google OAuth
+2. **JWT Tokens** - Secure session management
+3. **Wallet Verification** - Sui wallet signature verification
+
+### Data Encryption
+
+```
+┌─────────────────┐
+│   Seller Data   │
+└────────┬────────┘
+         │
+         │ 1. Encrypt with random key
+         ▼
+  ┌──────────────┐
+  │ Encrypted    │ → Upload to Walrus
+  │ Data         │
+  └──────────────┘
+         │
+         │ 2. Encrypt key with buyer's public key
+         ▼
+  ┌──────────────┐
+  │ Encrypted    │ → Store on-chain
+  │ Key          │
+  └──────────────┘
+         │
+         │ 3. Buyer decrypts with private key
+         ▼
+  ┌──────────────┐
+  │ Original     │
+  │ Data         │
+  └──────────────┘
+```
+
+### Security Best Practices
+
+- ✅ All API endpoints use HTTPS in production
+- ✅ Rate limiting on sensitive endpoints
+- ✅ Input validation with Zod schemas
+- ✅ SQL injection prevention via Prisma ORM
+- ✅ XSS protection with Helmet.js
+- ✅ CORS configured for trusted origins
+- ✅ Secrets stored in environment variables
+- ✅ Database credentials encrypted at rest
+
+---
+
+## ⛓️ Smart Contracts Overview
+
+The SourceNet smart contracts are written in **Sui Move** and deployed on the Sui blockchain.
+
+**Location**: `contracts/escrow/`
+
+### Contract Architecture
+
+```
+sourcenet::datapod    - Data listing management
+    │
+    ├─ DataPod struct
+    ├─ DataPodOwnerCap
+    └─ Events (Created, Published, Delisted)
+
+sourcenet::purchase   - Purchase transaction handling
+    │
+    ├─ PurchaseRequest struct
+    ├─ PurchaseOwnerCap
+    └─ Events (Created, Completed, Refunded, Disputed)
+
+sourcenet::escrow     - Payment escrow management
+    │
+    ├─ Escrow struct
+    ├─ EscrowOwnerCap
+    └─ Events (Created, Released, Refunded)
+```
+
+---
+
+## 📝 Contract Modules
+
+### 1. DataPod Module (`datapod.move`)
+
+Manages data listings and metadata.
+
+#### **Structs**
+
+```move
+public struct DataPod has key, store {
+    id: UID,
+    datapod_id: String,
+    seller: address,
+    title: String,
+    category: String,
+    description: String,
+    price_sui: u64,
+    data_hash: String,
+    blob_id: String,          // Walrus blob ID
+    kiosk_id: String,         // Sui Kiosk ID
+    status: u8,               // 0:draft, 1:published, 2:delisted
+    total_sales: u64,
+    average_rating: u64,      // Basis points (450 = 4.5)
+    created_at: u64,
+    published_at: u64,
+}
+
+public struct DataPodOwnerCap has key, store {
+    id: UID,
+    datapod_id: address,
+}
+```
+
+#### **Functions**
+
+##### `create_datapod`
+Creates a new data listing (draft status).
+
+```move
+public fun create_datapod(
+    datapod_id: String,
+    title: String,
+    category: String,
+    description: String,
+    price_sui: u64,
+    data_hash: String,
+    blob_id: String,
+    ctx: &mut TxContext,
+)
+```
+
+##### `publish_datapod`
+Publishes a datapod to the marketplace.
+
+```move
+public fun publish_datapod(
+    datapod: &mut DataPod,
+    kiosk_id: String,
+    cap: &DataPodOwnerCap,
+    ctx: &mut TxContext,
+)
+```
+
+##### `delist_datapod`
+Removes a datapod from the marketplace.
+
+```move
+public fun delist_datapod(
+    datapod: &mut DataPod,
+    cap: &DataPodOwnerCap,
+    ctx: &mut TxContext,
+)
+```
+
+##### `update_price`
+Updates the price of a datapod.
+
+```move
+public fun update_price(
+    datapod: &mut DataPod,
+    new_price: u64,
+    cap: &DataPodOwnerCap,
+)
+```
+
+#### **Events**
+
+- `DataPodCreated` - Emitted when a datapod is created
+- `DataPodPublished` - Emitted when published to marketplace
+- `DataPodDelisted` - Emitted when delisted
+- `DataPodPriceUpdated` - Emitted when price is updated
+
+---
+
+### 2. Purchase Module (`purchase.move`)
+
+Handles purchase requests and fulfillment.
+
+#### **Structs**
+
+```move
+public struct PurchaseRequest has key, store {
+    id: UID,
+    purchase_id: String,
+    datapod_id: String,
+    buyer: address,
+    seller: address,
+    buyer_public_key: String,  // For data encryption
+    price_sui: u64,
+    data_hash: String,
+    status: u8,                // 0:pending, 1:completed, 2:refunded, 3:disputed
+    created_at: u64,
+    completed_at: u64,
+}
+
+public struct PurchaseOwnerCap has key, store {
+    id: UID,
+    purchase_id: address,
+}
+```
+
+#### **Functions**
+
+##### `create_purchase`
+Initiates a new purchase request.
+
+```move
+public fun create_purchase(
+    purchase_id: String,
+    datapod_id: String,
+    buyer: address,
+    seller: address,
+    buyer_public_key: String,
+    price_sui: u64,
+    data_hash: String,
+    ctx: &mut TxContext,
+): (PurchaseRequest, PurchaseOwnerCap)
+```
+
+##### `complete_purchase`
+Marks a purchase as completed after seller fulfillment.
+
+```move
+public fun complete_purchase(
+    purchase: &mut PurchaseRequest,
+    cap: &PurchaseOwnerCap,
+    ctx: &mut TxContext,
+)
+```
+
+##### `refund_purchase`
+Refunds a purchase to the buyer.
+
+```move
+public fun refund_purchase(
+    purchase: &mut PurchaseRequest,
+    cap: &PurchaseOwnerCap,
+)
+```
+
+##### `dispute_purchase`
+Opens a dispute for a purchase.
+
+```move
+public fun dispute_purchase(
+    purchase: &mut PurchaseRequest,
+    ctx: &mut TxContext,
+)
+```
+
+#### **Events**
+
+- `PurchaseCreated` - Emitted when purchase is initiated
+- `PurchaseCompleted` - Emitted when seller fulfills
+- `PurchaseRefunded` - Emitted when refunded to buyer
+- `PurchaseDisputed` - Emitted when disputed
+
+---
+
+### 3. Escrow Module (`escrow.move`)
+
+Manages payment escrow between buyers and sellers.
+
+#### **Structs**
+
+```move
+public struct Escrow has key, store {
+    id: UID,
+    purchase_id: String,
+    buyer: address,
+    seller: address,
+    amount: u64,
+    data_hash: String,
+    status: u8,              // 0:pending, 1:released, 2:refunded
+    created_at: u64,
+    balance: Balance<SUI>,   // Holds the funds
+}
+
+public struct EscrowOwnerCap has key, store {
+    id: UID,
+    escrow_id: address,
+}
+```
+
+#### **Functions**
+
+##### `create_escrow`
+Creates a new escrow and locks funds.
+
+```move
+public fun create_escrow(
+    purchase_id: String,
+    buyer: address,
+    seller: address,
+    data_hash: String,
+    coin: Coin<SUI>,
+    ctx: &mut TxContext,
+): (Escrow, EscrowOwnerCap)
+```
+
+##### `release_escrow`
+Releases funds to the seller.
+
+```move
+public fun release_escrow(
+    escrow: &mut Escrow,
+    seller_address: address,
+    ctx: &mut TxContext,
+)
+```
+
+##### `refund_escrow`
+Refunds funds to the buyer.
+
+```move
+public fun refund_escrow(
+    escrow: &mut Escrow,
+    buyer_address: address,
+    ctx: &mut TxContext,
+)
+```
+
+#### **Events**
+
+- `EscrowCreated` - Emitted when escrow is created
+- `EscrowReleased` - Emitted when funds released to seller
+- `EscrowRefunded` - Emitted when funds refunded to buyer
+
+---
+
+## 🏗️ Bui & Testing
+
+### Prerequisites
+
+Install the Sui CLI:
 
 ```bash
-# Build and start all services
-docker-compose -f docker-compose.yml up -d
+# macOS
+brew install sui
 
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
+# Linux
+cargo install --locked --git https://github.com/MystenLabs/sui.git --branch devnet sui
 ```
 
-### Environment-Specific Configuration
+Verify installation:
+```bash
+sui --version
+```
 
-- **Development**: Use `.env.local` with LocalStack S3
-- **Staging**: Use `.env.staging` with AWS S3 test bucket
-- **Production**: Use `.env.production` with secure secrets management (e.g., AWS Secrets Manager)
+### Build Smart Contracts
 
-### Kubernetes
+```bash
+cd contracts/escrow
+sui move build
+```
 
-See `k8s/` directory for Kubernetes manifests and deployment guides.
+Expected output:
+```
+BUILDING sourcenet_escrow
+Build successful
+```
 
-## Contributing
+### Run Tests
 
-1. Fork repository
-2. Create feature branch: `git checkout -b feature/AmazingFeature`
-3. Install dependencies: `npm install`
-4. Make changes and ensure code quality:
-   ```bash
-   npm run lint
-   npm run format
-   npm test
-   ```
-5. Commit changes: `git commit -m 'Add AmazingFeature'`
-6. Push to branch: `git push origin feature/AmazingFeature`
-7. Open Pull Request
+```bash
+sui move test
+```
+
+Expected output:
+```
+Running Move unit tests
+[ PASS    ] 0x0::datapod::test_create_datapod
+[ PASS    ] 0x0::purchase::test_create_purchase
+[ PASS    ] 0x0::escrow::test_create_escrow
+Test result: OK. Total tests: 3; passed: 3; failed: 0
+```
+
+---
+
+## 🚢 Deployment
+
+### 1. Configure Sui Client
+
+```bash
+# Set active environment
+sui client active-env testnet
+
+# Verify active address
+sui client active-address
+
+# Check gas balance
+sui client gas
+```
+
+### 2. Publish Contract
+
+```bash
+cd contracts/escrow
+sui client publish --gas-budget 100000000
+```
+
+### 3. Save Package ID
+
+After successful deployment, note the **Package ID** from the output:
+
+```
+Published Package ID: 0xabcd1234...
+```
+
+### 4. Update Backend Configuration
+
+Update `.env`:
+
+```env
+SOURCENET_PACKAGE_ID=0xabcd1234...
+```
+
+### 5. Verify Deployment
+
+```bash
+sui client object <PACKAGE_ID>
+```
+
+---
+
+## 🧪 Testing
+
+### Backend Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run tests with coverage
+npm test -- --coverage
+
+# Run specific test file
+npm test -- src/controllers/auth.controller.test.ts
+
+# Watch mode
+npm test -- --watch
+```
+
+### Smart Contract Tests
+
+```bash
+cd contracts/escrow
+sui move test
+
+# Verbose output
+sui move test --verbose
+
+# Specific test
+sui move test --filter test_create_datapod
+```
+
+---
+
+## 📝 Contributing
+
+We welcome contributions! Please follow these guidelines:
+
+### Development Process
+
+1. **Fork** the repository
+2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
+3. **Install** dependencies (`npm install`)
+4. **Make** your changes
+5. **Test** thoroughly (`npm test`)
+6. **Lint** your code (`npm run lint`)
+7. **Format** with Prettier (`npm run format`)
+8. **Commit** with clear messages (`git commit -m 'Add amazing feature'`)
+9. **Push** to your branch (`git push origin feature/amazing-feature`)
+10. **Open** a Pull Request
 
 ### Code Standards
 
-- TypeScript with strict mode enabled
-- ESLint rules enforced (no `any` types, explicit return types)
-- Prettier formatting required
-- All tests must pass
-- Meaningful commit messages
+- ✅ TypeScript with strict mode enabled
+- ✅ No `any` types allowed
+- ✅ Explicit return types for functions
+- ✅ Comprehensive unit tests (>80% coverage)
+- ✅ Meaningful variable and function names
+- ✅ JSDoc comments for public APIs
+- ✅ Follow existing code structure
 
-## License
+### Commit Message Format
 
-This project is licensed under the MIT License.
+```
+<type>(<scope>): <description>
 
-## Support
+[optional body]
 
-For support, email support@sourcenet.io or open an issue on GitHub.
+[optional footer]
+```
+
+**Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+
+**Example**:
+```
+feat(marketplace): add category filtering to datapods endpoint
+
+- Added query parameter for category
+- Updated Swagger documentation
+- Added unit tests
+
+Closes #123
+```
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License**.
+
+```
+MIT License
+
+Copyright (c) 2024 SourceNet
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction...
+```
+
+---
+
+## 🆘 Support
+
+For questions or issues:
+
+- 📧 Email: support@sourcenet.io
+- 💬 Discord: [Join our community](https://discord.gg/sourcenet)
+- 🐛 Issues: [GitHub Issues](https://github.com/sourcenet/backend/issues)
+- 📚 Docs: [Read the Docs](https://docs.sourcenet.io)
+
+---
+
+**Built with ❤️ by the SourceNet Team**
