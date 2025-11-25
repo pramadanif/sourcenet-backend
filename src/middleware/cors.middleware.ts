@@ -13,8 +13,9 @@ export const corsConfig = {
       'http://localhost:3000',
       'http://localhost:3001',
       'http://127.0.0.1:3000',
+      ...(env.CORS_ORIGINS ? env.CORS_ORIGINS.split(',') : []),
     ].filter(Boolean);
-    
+
     // Add production URLs if available
     if (process.env.FRONTEND_URL) allowedOrigins.push(process.env.FRONTEND_URL);
     if (process.env.FRONTEND_URL_PROD) allowedOrigins.push(process.env.FRONTEND_URL_PROD);
