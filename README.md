@@ -132,11 +132,11 @@ POST /api/ai/chat
 └──────┬───────────┘
        │
        ▼
-┌──────────────────┐
-│   AI Service     │
-│  - Context build │
-│  - OpenAI call   │
-└──────┬───────────┘
+┌───────────────────────┐
+│   AI Service          │
+│  - Context build      │
+│  - DEEPSEEK V3 call   │
+└──────┬────────────────┘
        │
        ▼
 ┌──────────────────┐      ┌──────────────┐
@@ -1389,11 +1389,9 @@ ZKLOGIN_REDIRECT_URI=http://localhost:3000/auth/callback
 
 #### **AI Integration (Optional)**
 ```env
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MAX_TOKENS=1000
-OPENAI_TEMPERATURE=0.7
+OPENAI_API_KEY=...
+OPENAI_MODEL=...
+OPENAI_BASE_URL=...
 ```
 
 #### **Logging & Monitoring**
