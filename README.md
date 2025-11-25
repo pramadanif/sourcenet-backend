@@ -66,7 +66,6 @@ SourceNet follows a microservices-oriented architecture:
 5. **Storage Layer** - Walrus Protocol for decentralized file storage
 6. **Real-time Layer** - WebSocket for live updates
 7. **Job Queue** - BullMQ for background processing
-8. **Indexer** - Blockchain event listener and synchronizer
 
 ---
 
@@ -703,13 +702,6 @@ const exists = await StorageService.verifyFileExists(blobId);
 
 ```
 ┌──────────────────┐
-│  Indexer Service │
-│  (Background)    │
-└────┬─────────────┘
-     │
-     │ 1. Poll Sui blockchain every 5s
-     ▼
-┌──────────────────┐
 │  Sui Blockchain  │
 │  Event Query     │
 └────┬─────────────┘
@@ -1047,8 +1039,7 @@ const exists = await StorageService.verifyFileExists(blobId);
 1. **Escrow Holding**: Funds are locked in `Escrow.balance` until release/refund
 2. **Capability Verification**: All mutations require ownership capability proof
 3. **Status Checks**: Prevents double-spending and invalid state transitions
-4. **Event Emission**: All state changes emit events for indexer tracking
-5. **Atomic Operations**: All operations are atomic (succeed or fail completely)
+4. **Atomic Operations**: All operations are atomic (succeed or fail completely)
 
 ---
 
@@ -1411,7 +1402,6 @@ SENTRY_DSN=https://...              # Optional: Sentry error tracking
 | **Development** | `npm run dev` | Start with hot-reload |
 | **Production** | `npm start` | Run compiled code |
 | **Build** | `npm run build` | Compile TypeScript |
-| **Indexer** | `npm run indexer:dev` | Start blockchain indexer |
 | **Database Push** | `npm run db:push` | Push schema to DB |
 | **Database Migrate** | `npm run db:migrate` | Run migrations |
 | **Database Seed** | `npm run db:seed` | Seed initial data |
@@ -1431,10 +1421,7 @@ npm run docker:up
 # 2. Start backend server (Terminal 1)
 npm run dev
 
-# 3. Start blockchain indexer (Terminal 2)
-npm run indexer:dev
-
-# 4. View logs
+# 3. View logs
 tail -f logs/combined.log
 ```
 
