@@ -60,6 +60,8 @@ model DataPod {
   tags              String[] @default([])
   priceSui          Decimal  @db.Decimal(20, 9) @map("price_sui")
   dataHash          String   @unique @map("data_hash")
+  previewData       String?  @db.Text @map("preview_data")
+  sizeBytes         BigInt?  @map("size_bytes")
   totalSales        Int      @default(0) @map("total_sales")
   averageRating     Decimal? @db.Decimal(3, 2) @map("average_rating")
   status            String   @default("draft") @map("status") // draft, published, delisted
@@ -148,6 +150,8 @@ model UploadStaging {
   datapodId         String?  @db.Uuid @unique @map("datapod_id")
   filePath          String   @map("file_path") // S3 or Walrus path
   dataHash          String   @unique @map("data_hash")
+  previewData       String?  @db.Text @map("preview_data")
+  sizeBytes         BigInt?  @map("size_bytes")
   metadata          Json?    @map("metadata") // File metadata
   status            String   @default("pending") @map("status") // pending, published, expired
   expiresAt         DateTime @map("expires_at") // Auto-cleanup

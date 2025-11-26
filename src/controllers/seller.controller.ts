@@ -131,6 +131,8 @@ export const uploadData = async (req: Request, res: Response): Promise<void> => 
         datapodId: null, // Will be set after publishing
         filePath: uploadedFile.cid, // Store blob ID, not URL
         dataHash,
+        previewData: previewData.substring(0, 5000), // Store up to 5000 chars
+        sizeBytes: BigInt(file.size),
         metadata: {
           ...parsedMetadata,
           // File metadata for download
@@ -287,6 +289,8 @@ export const publishDataPod = async (req: Request, res: Response): Promise<void>
         tags: metadata.tags || [],
         priceSui: new Decimal(metadata.price_sui),
         dataHash: uploadStaging.dataHash,
+        previewData: uploadStaging.previewData,
+        sizeBytes: uploadStaging.sizeBytes,
         totalSales: 0,
         averageRating: new Decimal(0),
         status: 'published',

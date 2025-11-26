@@ -256,7 +256,10 @@ export const getDataPodDetails = async (req: Request, res: Response): Promise<vo
 
     const response = {
       status: 'success',
-      data: datapod,
+      data: {
+        ...datapod,
+        sizeBytes: datapod.sizeBytes ? datapod.sizeBytes.toString() : '0',
+      },
     };
 
     // Cache result
@@ -455,8 +458,8 @@ export const getDataPods = async (req: Request, res: Response): Promise<void> =>
       seller_total_sales: pod.seller.totalSales,
       total_sales: pod.totalSales,
       average_rating: pod.averageRating ? parseFloat(pod.averageRating.toString()) : null,
-      preview_data: pod.description?.substring(0, 100) || '',
-      size_bytes: 0, // TODO: Add size tracking to schema
+      preview_data: pod.previewData || pod.description?.substring(0, 100) || '',
+      size_bytes: pod.sizeBytes ? pod.sizeBytes.toString() : '0',
       published_at: pod.publishedAt?.toISOString(),
     }));
 
