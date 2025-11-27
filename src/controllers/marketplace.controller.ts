@@ -102,9 +102,21 @@ export const browseMarketplace = async (req: Request, res: Response): Promise<vo
       prisma.dataPod.count({ where: filters }),
     ]);
 
+    // Serialize BigInt and Decimal fields
+    const serializedDatapods = datapods.map(pod => ({
+      ...pod,
+      sizeBytes: pod.sizeBytes?.toString() || '0',
+      priceSui: pod.priceSui.toString(),
+      averageRating: pod.averageRating?.toString() || '0',
+      seller: {
+        ...pod.seller,
+        averageRating: pod.seller.averageRating?.toString() || '0',
+      },
+    }));
+
     const response = {
       status: 'success',
-      data: datapods,
+      data: serializedDatapods,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -181,10 +193,22 @@ export const searchMarketplace = async (req: Request, res: Response): Promise<vo
       prisma.dataPod.count({ where: filters }),
     ]);
 
+    // Serialize BigInt and Decimal fields
+    const serializedDatapods = datapods.map(pod => ({
+      ...pod,
+      sizeBytes: pod.sizeBytes?.toString() || '0',
+      priceSui: pod.priceSui.toString(),
+      averageRating: pod.averageRating?.toString() || '0',
+      seller: {
+        ...pod.seller,
+        averageRating: pod.seller.averageRating?.toString() || '0',
+      },
+    }));
+
     res.status(200).json({
       status: 'success',
       query: q,
-      data: datapods,
+      data: serializedDatapods,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -309,9 +333,21 @@ export const getTopRated = async (req: Request, res: Response): Promise<void> =>
       },
     });
 
+    // Serialize BigInt and Decimal fields
+    const serializedDatapods = datapods.map(pod => ({
+      ...pod,
+      sizeBytes: pod.sizeBytes?.toString() || '0',
+      priceSui: pod.priceSui.toString(),
+      averageRating: pod.averageRating?.toString() || '0',
+      seller: {
+        ...pod.seller,
+        averageRating: pod.seller.averageRating?.toString() || '0',
+      },
+    }));
+
     const response = {
       status: 'success',
-      data: datapods,
+      data: serializedDatapods,
     };
 
     // Cache result (6 hours)

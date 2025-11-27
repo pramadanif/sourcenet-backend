@@ -403,10 +403,22 @@ export const getSellerDataPods = async (req: Request, res: Response): Promise<vo
       },
     });
 
+    // Convert BigInt fields to strings for JSON serialization
+    const serializedDatapods = datapods.map(datapod => ({
+      ...datapod,
+      sizeBytes: datapod.sizeBytes?.toString() || '0',
+      priceSui: datapod.priceSui.toString(),
+      averageRating: datapod.averageRating?.toString() || '0',
+      seller: {
+        ...datapod.seller,
+        averageRating: datapod.seller.averageRating?.toString() || '0',
+      },
+    }));
+
     res.status(200).json({
       status: 'success',
-      count: datapods.length,
-      datapods,
+      count: serializedDatapods.length,
+      datapods: serializedDatapods,
     });
   } catch (error) {
     logger.error('Get seller DataPods failed', { error, requestId: req.requestId });

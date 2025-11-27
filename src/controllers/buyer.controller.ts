@@ -52,10 +52,20 @@ export const getBuyerPurchases = async (req: Request, res: Response): Promise<vo
       prisma.purchaseRequest.count({ where: { buyerAddress } }),
     ]);
 
+    // Serialize BigInt and Decimal fields
+    const serializedPurchases = purchases.map(purchase => ({
+      ...purchase,
+      priceSui: purchase.priceSui.toString(),
+      datapod: purchase.datapod ? {
+        ...purchase.datapod,
+        priceSui: purchase.datapod.priceSui.toString(),
+      } : null,
+    }));
+
     res.status(200).json({
       status: 'success',
       data: {
-        purchases,
+        purchases: serializedPurchases,
         pagination: {
           page,
           limit,
@@ -473,9 +483,26 @@ export const getPurchaseDetails = async (req: Request, res: Response): Promise<v
       throw new ValidationError('Unauthorized: buyer does not own this purchase');
     }
 
+    // Serialize BigInt and Decimal fields
+    const serializedPurchase = {
+      ...purchase,
+      priceSui: purchase.priceSui.toString(),
+      datapod: purchase.datapod ? {
+        ...purchase.datapod,
+        priceSui: purchase.datapod.priceSui.toString(),
+        sizeBytes: purchase.datapod.sizeBytes?.toString() || '0',
+        averageRating: purchase.datapod.averageRating?.toString() || '0',
+        seller: purchase.datapod.seller ? {
+          ...purchase.datapod.seller,
+          totalRevenue: purchase.datapod.seller.totalRevenue.toString(),
+          averageRating: purchase.datapod.seller.averageRating?.toString() || '0',
+        } : null,
+      } : null,
+    };
+
     res.status(200).json({
       status: 'success',
-      purchase,
+      purchase: serializedPurchase,
     });
   } catch (error) {
     logger.error('Get purchase details failed', { error, requestId: req.requestId });
