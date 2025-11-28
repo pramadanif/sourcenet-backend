@@ -63,22 +63,88 @@ Docs: [SourceNet Docs](https://sourcenet.vercel.app/docs)
 
 SourceNet follows a microservices-oriented architecture:
 
-```
-┌─────────────┐         ┌──────────────┐         ┌───────────────┐
-│   Frontend  │────────▶│    Backend   │────────▶│  Sui Blockchain│
-│  (Next.js)  │         │  (Express)   │         │   (Move SC)    │
-└─────────────┘         └──────────────┘         └───────────────┘
-                              │    │
-                              │    │
-                         ┌────▼────▼────┐
-                         │  PostgreSQL   │
-                         │    + Redis    │
-                         └───────────────┘
-                              │
-                         ┌────▼────┐
-                         │ Walrus  │
-                         │ Storage │
-                         └─────────┘
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        FE[Frontend<br/>Next.js]
+    end
+    
+    subgraph "API Layer"
+        API[Backend API<br/>Express.js]
+        WS[WebSocket Server<br/>Real-time Events]
+        AUTH[Authentication<br/>ZKLogin + JWT]
+    end
+    
+    subgraph "Processing Layer"
+        QUEUE[Job Queue<br/>BullMQ]
+        WORKER[Background Workers<br/>Data Processing]
+    end
+    
+    subgraph "Data Layer"
+        DB[(PostgreSQL<br/>Primary Database)]
+        CACHE[(Redis<br/>Cache + Sessions)]
+    end
+    
+    subgraph "Blockchain Layer"
+        BC[Sui Blockchain<br/>Smart Contracts]
+        SC1[DataPod Module]
+        SC2[Purchase Module]
+        SC3[Escrow Module]
+    end
+    
+    subgraph "Storage Layer"
+        WALRUS[Walrus Protocol<br/>Decentralized Storage]
+    end
+    
+    subgraph "External Services"
+        AI[OpenAI API<br/>AI Assistant]
+    end
+    
+    %% Client connections
+    FE -->|HTTP/REST| API
+    FE <-->|WebSocket| WS
+    FE -->|Auth Request| AUTH
+    
+    %% API connections
+    API --> DB
+    API --> CACHE
+    API --> QUEUE
+    API --> BC
+    API --> WALRUS
+    API --> AI
+    AUTH --> DB
+    AUTH --> CACHE
+    
+    %% Processing
+    QUEUE --> WORKER
+    WORKER --> DB
+    WORKER --> WALRUS
+    WORKER --> BC
+    
+    %% WebSocket
+    WS --> CACHE
+    WS --> DB
+    
+    %% Blockchain modules
+    BC --> SC1
+    BC --> SC2
+    BC --> SC3
+    
+    %% Styling
+    style FE fill:#4F46E5,stroke:#312E81,color:#fff,stroke-width:2px
+    style API fill:#059669,stroke:#065F46,color:#fff,stroke-width:2px
+    style WS fill:#059669,stroke:#065F46,color:#fff,stroke-width:2px
+    style AUTH fill:#059669,stroke:#065F46,color:#fff,stroke-width:2px
+    style QUEUE fill:#F59E0B,stroke:#D97706,color:#fff,stroke-width:2px
+    style WORKER fill:#F59E0B,stroke:#D97706,color:#fff,stroke-width:2px
+    style DB fill:#7C3AED,stroke:#5B21B6,color:#fff,stroke-width:2px
+    style CACHE fill:#7C3AED,stroke:#5B21B6,color:#fff,stroke-width:2px
+    style BC fill:#DC2626,stroke:#991B1B,color:#fff,stroke-width:2px
+    style SC1 fill:#EF4444,stroke:#B91C1C,color:#fff,stroke-width:2px
+    style SC2 fill:#EF4444,stroke:#B91C1C,color:#fff,stroke-width:2px
+    style SC3 fill:#EF4444,stroke:#B91C1C,color:#fff,stroke-width:2px
+    style WALRUS fill:#EA580C,stroke:#9A3412,color:#fff,stroke-width:2px
+    style AI fill:#8B5CF6,stroke:#6D28D9,color:#fff,stroke-width:2px
 ```
 
 ### Key Components
@@ -142,31 +208,18 @@ POST /api/ai/chat
 
 ### Architecture
 
-```
-┌─────────────┐
-│   Frontend  │
-└──────┬──────┘
-       │ POST /api/ai/chat
-       ▼
-┌──────────────────┐
-│  AI Controller   │
-│  (Auth + Rate    │
-│   Limiting)      │
-└──────┬───────────┘
-       │
-       ▼
-┌───────────────────────┐
-│   AI Service          │
-│  - Context build      │
-│  - OpenAI call   │
-└──────┬────────────────┘
-       │
-       ▼
-┌──────────────────┐      ┌──────────────┐
-│   PostgreSQL     │      │  OpenRouter  │
-│  - Conversations │◄────►│  (OpenAI)     │
-│  - Messages      │      └──────────────┘
-└──────────────────┘
+```mermaid
+flowchart TD
+    A[Frontend] -->|POST /api/ai/chat| B[AI Controller<br/>Auth + Rate Limiting]
+    B --> C[AI Service<br/>- Context build<br/>- OpenAI call]
+    C <--> D[(PostgreSQL<br/>- Conversations<br/>- Messages)]
+    C <--> E[OpenRouter<br/>OpenAI]
+    
+    style A fill:#4F46E5,stroke:#312E81,color:#fff
+    style B fill:#059669,stroke:#065F46,color:#fff
+    style C fill:#7C3AED,stroke:#5B21B6,color:#fff
+    style D fill:#DC2626,stroke:#991B1B,color:#fff
+    style E fill:#EA580C,stroke:#9A3412,color:#fff
 ```
 
 ### AI System Prompt
@@ -196,77 +249,32 @@ SourceNet uses **Walrus Protocol** for decentralized, immutable data storage on 
 
 ### Walrus Storage Flow
 
-```
-┌──────────────┐
-│   Upload     │
-│   Request    │
-└──────┬───────┘
-       │
-       │ 1. Encrypt file with symmetric key
-       ▼
-┌──────────────────────────────────────┐
-│        Storage Service               │
-│  StorageService.uploadToWalrus()     │
-└──────┬───────────────────────────────┘
-       │
-       │ 2. Upload to Walrus Publisher
-       │    POST https://publisher.walrus-testnet.walrus.space/v1/store
-       ▼
-┌──────────────────────────────────────┐
-│      Walrus Publisher Node           │
-│  (Testnet: walrus-testnet)           │
-└──────┬───────────────────────────────┘
-       │
-       │ 3. Returns blob_id (unique identifier)
-       ▼
-┌──────────────────────────────────────┐
-│   Walrus Distributed Storage         │
-│   - Data split into erasure-coded    │
-│     chunks                            │
-│   - Distributed across storage nodes  │
-│   - Stored with redundancy            │
-└──────┬───────────────────────────────┘
-       │
-       │ 4. Save blob_id to PostgreSQL
-       ▼
-┌──────────────────────────────────────┐
-│      Database Record                 │
-│  - datapod.blobId                    │
-│  - purchaseRequest.encryptedBlobId   │
-└──────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[Upload Request] -->|1. Encrypt file with<br/>symmetric key| B[Storage Service<br/>StorageService.uploadToWalrus]
+    B -->|2. Upload to Walrus Publisher<br/>POST /v1/store| C[Walrus Publisher Node<br/>Testnet: walrus-testnet]
+    C -->|3. Returns blob_id<br/>unique identifier| D[Walrus Distributed Storage<br/>- Data split into erasure-coded chunks<br/>- Distributed across storage nodes<br/>- Stored with redundancy]
+    D -->|4. Save blob_id to PostgreSQL| E[(Database Record<br/>- datapod.blobId<br/>- purchaseRequest.encryptedBlobId)]
+    
+    style A fill:#4F46E5,stroke:#312E81,color:#fff
+    style B fill:#059669,stroke:#065F46,color:#fff
+    style C fill:#7C3AED,stroke:#5B21B6,color:#fff
+    style D fill:#EA580C,stroke:#9A3412,color:#fff
+    style E fill:#DC2626,stroke:#991B1B,color:#fff
 ```
 
 ### Download Flow
 
-```
-┌──────────────┐
-│   Download   │
-│   Request    │
-└──────┬───────┘
-       │
-       │ 1. Fetch blob_id from database
-       ▼
-┌──────────────────────────────────────┐
-│        Storage Service               │
-│  StorageService.downloadFromWalrus() │
-└──────┬───────────────────────────────┘
-       │
-       │ 2. Retrieve from Walrus Gateway
-       │    GET https://gateway.walrus.space/ipfs/{blob_id}
-       ▼
-┌──────────────────────────────────────┐
-│      Walrus Gateway                  │
-│  - Aggregates chunks                 │
-│  - Reconstructs original file        │
-└──────┬───────────────────────────────┘
-       │
-       │ 3. Returns encrypted file buffer
-       ▼
-┌──────────────────────────────────────┐
-│      Backend API                     │
-│  - Stream to buyer                   │
-│  - Include decryption key in header  │
-└──────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[Download Request] -->|1. Fetch blob_id<br/>from database| B[Storage Service<br/>StorageService.downloadFromWalrus]
+    B -->|2. Retrieve from Walrus Gateway<br/>GET /ipfs/blob_id| C[Walrus Gateway<br/>- Aggregates chunks<br/>- Reconstructs original file]
+    C -->|3. Returns encrypted<br/>file buffer| D[Backend API<br/>- Stream to buyer<br/>- Include decryption key in header]
+    
+    style A fill:#4F46E5,stroke:#312E81,color:#fff
+    style B fill:#059669,stroke:#065F46,color:#fff
+    style C fill:#EA580C,stroke:#9A3412,color:#fff
+    style D fill:#7C3AED,stroke:#5B21B6,color:#fff
 ```
 
 ### Walrus Configuration
@@ -327,94 +335,32 @@ const exists = await StorageService.verifyFileExists(blobId);
 
 #### 1. Seller Data Upload & Publish Flow
 
-```
-┌─────────┐
-│ Seller  │
-└────┬────┘
-     │
-     │ 1. POST /api/seller/upload (file, metadata)
-     ▼
-┌──────────────────┐
-│  Backend API     │
-│ uploadController │
-└────┬─────────────┘
-     │
-     │ 2. Validate file & metadata (Zod schema)
-     │ 3. Generate data hash (SHA-256)
-     │ 4. Encrypt file with random symmetric key
-     │
-     ▼
-┌──────────────────┐
-│  Walrus Storage  │
-└────┬─────────────┘
-     │ 5. Upload encrypted file → Returns blob_id
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│  UploadStaging   │
-└────┬─────────────┘
-     │ 6. Store staging data:
-     │    - sellerId
-     │    - filePath (Walrus blob_id)
-     │    - dataHash
-     │    - metadata
-     │    - status: "pending"
-     │
-     ▼
-     Return staging_id to Seller
-     
-     │ 7. Seller reviews and confirms
-     │
-     │ 8. POST /api/seller/publish
-     ▼
-┌──────────────────┐
-│  Backend API     │
-│ publishController│
-└────┬─────────────┘
-     │
-     │ 9. Prepare blockchain transaction
-     │
-     ▼
-┌──────────────────┐
-│  Sui Blockchain  │
-│  datapod::create │
-└────┬─────────────┘
-     │ 10. Create DataPod object on-chain
-     │     - Returns datapod_id (object address)
-     │     - Event: DataPodCreated
-     │
-     ▼
-┌──────────────────┐
-│  Backend API     │
-└────┬─────────────┘
-     │ 11. Sponsor gas & submit transaction
-     │     - Returns tx_digest
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│  DataPod         │
-└────┬─────────────┘
-     │ 12. Insert DataPod record:
-     │     - datapodId (on-chain)
-     │     - sellerId
-     │     - title, description, category
-     │     - priceSui
-     │     - dataHash
-     │     - blobId (Walrus)
-     │     - status: "published"
-     │
-     ▼
-┌──────────────────┐
-│  WebSocket       │
-└────┬─────────────┘
-     │ 13. Broadcast event:
-     │     - type: "datapod.published"
-     │     - data: { datapodId, title, category, price }
-     │
-     ▼
-   SUCCESS
+```mermaid
+sequenceDiagram
+    participant S as Seller
+    participant B as Backend API
+    participant W as Walrus Storage
+    participant DB as PostgreSQL
+    participant BC as Sui Blockchain
+    participant WS as WebSocket
+    
+    S->>B: 1. POST /api/seller/upload<br/>(file, metadata)
+    Note over B: 2. Validate file & metadata<br/>3. Generate data hash<br/>4. Encrypt file
+    B->>W: 5. Upload encrypted file
+    W-->>B: Returns blob_id
+    B->>DB: 6. Store staging data<br/>(sellerId, blob_id, dataHash)
+    DB-->>S: Return staging_id
+    
+    Note over S: 7. Seller reviews and confirms
+    
+    S->>B: 8. POST /api/seller/publish
+    Note over B: 9. Prepare blockchain transaction
+    B->>BC: 10. datapod::create
+    BC-->>B: Returns datapod_id<br/>Event: DataPodCreated
+    Note over B: 11. Sponsor gas & submit
+    B->>DB: 12. Insert DataPod record<br/>(datapodId, blobId, status: published)
+    B->>WS: 13. Broadcast event<br/>(datapod.published)
+    WS-->>S: SUCCESS
 ```
 
 **Key Steps:**
@@ -430,148 +376,40 @@ const exists = await StorageService.verifyFileExists(blobId);
 
 #### 2. Buyer Purchase Flow
 
-```
-┌─────────┐
-│ Buyer   │
-└────┬────┘
-     │
-     │ 1. POST /api/buyer/purchase
-     │    { datapodId, buyerPublicKey }
-     ▼
-┌──────────────────┐
-│  Backend API     │
-│ purchaseController│
-└────┬─────────────┘
-     │
-     │ 2. Validate datapod exists & published
-     │ 3. Check buyer hasn't already purchased
-     │ 4. Generate purchase_id (UUID)
-     │
-     ▼
-┌──────────────────┐
-│  Sui Blockchain  │
-│ purchase::create │
-└────┬─────────────┘
-     │ 5. Create PurchaseRequest on-chain
-     │    - purchaseId
-     │    - datapodId
-     │    - buyer address
-     │    - seller address
-     │    - buyerPublicKey
-     │    - priceSui
-     │    - Event: PurchaseCreated
-     │
-     ▼
-┌──────────────────┐
-│  Sui Blockchain  │
-│  escrow::create  │
-└────┬─────────────┘
-     │ 6. Create Escrow object
-     │    - Lock buyer's SUI tokens
-     │    - Returns escrow_id
-     │    - Event: EscrowCreated
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│ PurchaseRequest  │
-└────┬─────────────┘
-     │ 7. Insert PurchaseRequest:
-     │    - purchaseRequestId (on-chain)
-     │    - datapodId
-     │    - buyerId
-     │    - buyerAddress
-     │    - sellerAddress
-     │    - buyerPublicKey
-     │    - priceSui
-     │    - status: "pending"
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│ EscrowTransaction│
-└────┬─────────────┘
-     │ 8. Insert EscrowTransaction:
-     │    - purchaseRequestId
-     │    - sellerId
-     │    - amountSui
-     │    - escrowObjectId (on-chain)
-     │    - status: "holding"
-     │
-     ▼
-┌──────────────────┐
-│  BullMQ          │
-│  Fulfillment Job │
-└────┬─────────────┘
-     │ 9. Queue fulfillment job:
-     │    - purchaseRequestId
-     │    - Job processes in background
-     │
-     ▼
-┌──────────────────┐
-│  Job Worker      │
-└────┬─────────────┘
-     │ 10. Fetch encrypted file from Walrus
-     │ 11. Re-encrypt with buyer's public key
-     │ 12. Upload re-encrypted file to Walrus
-     │     - Returns encrypted_blob_id
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│ PurchaseRequest  │
-└────┬─────────────┘
-     │ 13. Update PurchaseRequest:
-     │     - encryptedBlobId
-     │     - decryptionKey (encrypted for buyer)
-     │     - status: "completed"
-     │     - completedAt: NOW()
-     │
-     ▼
-┌──────────────────┐
-│  Sui Blockchain  │
-│ purchase::       │
-│   complete       │
-└────┬─────────────┘
-     │ 14. Mark purchase as completed on-chain
-     │     - Event: PurchaseCompleted
-     │
-     ▼
-┌──────────────────┐
-│  Sui Blockchain  │
-│ escrow::release  │
-└────┬─────────────┘
-     │ 15. Release escrow to seller
-     │     - Transfer SUI to seller address
-     │     - Event: EscrowReleased
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│ EscrowTransaction│
-└────┬─────────────┘
-     │ 16. Update EscrowTransaction:
-     │     - status: "released"
-     │     - releasedAt: NOW()
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│  DataPod         │
-└────┬─────────────┘
-     │ 17. Update DataPod:
-     │     - totalSales++
-     │
-     ▼
-┌──────────────────┐
-│  WebSocket       │
-└────┬─────────────┘
-     │ 18. Notify buyer:
-     │     - type: "purchase.completed"
-     │     - Buyer can now download
-     │
-     ▼
-   SUCCESS
+```mermaid
+sequenceDiagram
+    participant B as Buyer
+    participant API as Backend API
+    participant BC as Sui Blockchain
+    participant DB as PostgreSQL
+    participant Q as BullMQ
+    participant W as Walrus Storage
+    participant WS as WebSocket
+    
+    B->>API: 1. POST /api/buyer/purchase<br/>(datapodId, buyerPublicKey)
+    Note over API: 2. Validate datapod<br/>3. Check no duplicate<br/>4. Generate purchase_id
+    API->>BC: 5. purchase::create
+    BC-->>API: PurchaseRequest created<br/>Event: PurchaseCreated
+    API->>BC: 6. escrow::create (lock SUI)
+    BC-->>API: Escrow created<br/>Event: EscrowCreated
+    API->>DB: 7. Insert PurchaseRequest<br/>(status: pending)
+    API->>DB: 8. Insert EscrowTransaction<br/>(status: holding)
+    API->>Q: 9. Queue fulfillment job
+    
+    Note over Q: Background Processing
+    Q->>W: 10-11. Fetch & re-encrypt file
+    W-->>Q: Encrypted file
+    Q->>W: 12. Upload re-encrypted file
+    W-->>Q: Returns encrypted_blob_id
+    Q->>DB: 13. Update PurchaseRequest<br/>(encryptedBlobId, status: completed)
+    Q->>BC: 14. purchase::complete
+    BC-->>Q: Event: PurchaseCompleted
+    Q->>BC: 15. escrow::release
+    BC-->>Q: Transfer SUI to seller<br/>Event: EscrowReleased
+    Q->>DB: 16. Update EscrowTransaction<br/>(status: released)
+    Q->>DB: 17. Update DataPod<br/>(totalSales++)
+    Q->>WS: 18. Notify buyer
+    WS-->>B: purchase.completed<br/>Ready to download
 ```
 
 **Key Steps:**
@@ -587,56 +425,22 @@ const exists = await StorageService.verifyFileExists(blobId);
 
 #### 3. Data Download Flow
 
-```
-┌─────────┐
-│ Buyer   │
-└────┬────┘
-     │
-     │ 1. GET /api/buyer/download/:purchaseId
-     │    Headers: Authorization: Bearer <JWT>
-     ▼
-┌──────────────────┐
-│  Backend API     │
-│ downloadController│
-└────┬─────────────┘
-     │
-     │ 2. Verify JWT & extract userId
-     │ 3. Validate purchase belongs to buyer
-     │ 4. Check purchase status === "completed"
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│ PurchaseRequest  │
-└────┬─────────────┘
-     │ 5. Fetch:
-     │    - encryptedBlobId
-     │    - decryptionKey (encrypted)
-     │
-     ▼
-┌──────────────────┐
-│  Walrus Storage  │
-└────┬─────────────┘
-     │ 6. Fetch encrypted file by blob_id
-     │
-     ▼
-┌──────────────────┐
-│  Backend API     │
-└────┬─────────────┘
-     │ 7. Stream file to buyer with headers:
-     │    - Content-Disposition: attachment
-     │    - X-Decryption-Key: <encrypted_key>
-     │
-     ▼
-┌─────────┐
-│ Buyer   │
-└────┬────┘
-     │ 8. Decrypt file client-side:
-     │    - Use buyer's private key to decrypt encryption key
-     │    - Use decrypted key to decrypt file
-     │
-     ▼
-   Original Data
+```mermaid
+sequenceDiagram
+    participant B as Buyer
+    participant API as Backend API
+    participant DB as PostgreSQL
+    participant W as Walrus Storage
+    
+    B->>API: 1. GET /api/buyer/download/:purchaseId<br/>Authorization: Bearer JWT
+    Note over API: 2. Verify JWT & extract userId<br/>3. Validate purchase ownership<br/>4. Check status === completed
+    API->>DB: 5. Fetch encryptedBlobId<br/>& decryptionKey
+    DB-->>API: Purchase data
+    API->>W: 6. Fetch encrypted file by blob_id
+    W-->>API: Encrypted file buffer
+    API->>B: 7. Stream file with headers<br/>Content-Disposition: attachment<br/>X-Decryption-Key: encrypted_key
+    Note over B: 8. Decrypt file client-side<br/>- Decrypt encryption key with private key<br/>- Decrypt file with decrypted key
+    B->>B: Original Data
 ```
 
 **Key Steps:**
@@ -650,67 +454,22 @@ const exists = await StorageService.verifyFileExists(blobId);
 
 #### 4. Review Submission Flow
 
-```
-┌─────────┐
-│ Buyer   │
-└────┬────┘
-     │
-     │ 1. POST /api/review
-     │    { purchaseRequestId, rating, comment }
-     ▼
-┌──────────────────┐
-│  Backend API     │
-│ reviewController │
-└────┬─────────────┘
-     │
-     │ 2. Validate:
-     │    - Purchase exists & completed
-     │    - Buyer owns purchase
-     │    - No existing review
-     │    - Rating in range 1-5
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│  Review          │
-└────┬─────────────┘
-     │ 3. Insert Review:
-     │    - datapodId
-     │    - purchaseRequestId
-     │    - buyerId
-     │    - buyerAddress
-     │    - rating
-     │    - comment
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│  DataPod         │
-└────┬─────────────┘
-     │ 4. Recalculate DataPod averageRating:
-     │    - SELECT AVG(rating) FROM reviews
-     │    - UPDATE data_pods SET average_rating = ?
-     │
-     ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│  User (Seller)   │
-└────┬─────────────┘
-     │ 5. Recalculate Seller averageRating:
-     │    - Average across all seller's datapods
-     │    - UPDATE users SET average_rating = ?
-     │
-     ▼
-┌──────────────────┐
-│  WebSocket       │
-└────┬─────────────┘
-     │ 6. Broadcast:
-     │    - type: "review.created"
-     │    - Notify seller
-     │    - Update marketplace
-     │
-     ▼
-   SUCCESS
+```mermaid
+sequenceDiagram
+    participant B as Buyer
+    participant API as Backend API
+    participant DB as PostgreSQL
+    participant WS as WebSocket
+    
+    B->>API: 1. POST /api/review<br/>(purchaseRequestId, rating, comment)
+    Note over API: 2. Validate:<br/>- Purchase exists & completed<br/>- Buyer owns purchase<br/>- No existing review<br/>- Rating in range 1-5
+    API->>DB: 3. Insert Review<br/>(datapodId, rating, comment)
+    DB-->>API: Review created
+    API->>DB: 4. Recalculate DataPod averageRating<br/>AVG(rating) FROM reviews
+    API->>DB: 5. Recalculate Seller averageRating<br/>Average across all seller's datapods
+    API->>WS: 6. Broadcast event<br/>(review.created)
+    WS-->>B: SUCCESS
+    WS-->>API: Notify seller & update marketplace
 ```
 
 **Key Steps:**
@@ -1092,89 +851,45 @@ const exists = await StorageService.verifyFileExists(blobId);
 
 #### 4. Complete Transaction Flow (Backend + Smart Contract)
 
-```
-┌─────────┐     ┌──────────┐     ┌────────────┐     ┌─────────┐
-│ Buyer   │     │ Backend  │     │ Blockchain │     │ Walrus  │
-└────┬────┘     └────┬─────┘     └─────┬──────┘     └────┬────┘
-     │               │                  │                  │
-     │ 1. POST       │                  │                  │
-     │ /purchase     │                  │                  │
-     ├──────────────▶│                  │                  │
-     │               │                  │                  │
-     │               │ 2. create_purchase()                │
-     │               ├─────────────────▶│                  │
-     │               │                  │                  │
-     │               │ 3. PurchaseRequest                  │
-     │               │    created                          │
-     │               │◀─────────────────┤                  │
-     │               │                  │                  │
-     │               │ 4. create_escrow(coin)              │
-     │               ├─────────────────▶│                  │
-     │               │                  │                  │
-     │               │ 5. Escrow created                   │
-     │               │    Funds LOCKED  │                  │
-     │               │◀─────────────────┤                  │
-     │               │                  │                  │
-     │ 6. Purchase   │                  │                  │
-     │    created    │                  │                  │
-     │◀──────────────┤                  │                  │
-     │               │                  │                  │
-     │               │ 7. Queue job     │                  │
-     │               │    (BullMQ)      │                  │
-     │               │                  │                  │
-     │               │ 8. Fetch encrypted file             │
-     │               ├────────────────────────────────────▶│
-     │               │                  │                  │
-     │               │ 9. Encrypted data                   │
-     │               │◀────────────────────────────────────┤
-     │               │                  │                  │
-     │               │ 10. Re-encrypt   │                  │
-     │               │     with buyer   │                  │
-     │               │     public key   │                  │
-     │               │                  │                  │
-     │               │ 11. Upload re-encrypted             │
-     │               ├────────────────────────────────────▶│
-     │               │                  │                  │
-     │               │ 12. Return blob_id                  │
-     │               │◀────────────────────────────────────┤
-     │               │                  │                  │
-     │               │ 13. complete_purchase()             │
-     │               ├─────────────────▶│                  │
-     │               │                  │                  │
-     │               │ 14. Purchase status = completed     │
-     │               │◀─────────────────┤                  │
-     │               │                  │                  │
-     │               │ 15. release_escrow()                │
-     │               ├─────────────────▶│                  │
-     │               │                  │                  │
-     │               │ 16. Transfer SUI                    │
-     │               │     to seller    │                  │
-     │               │◀─────────────────┤                  │
-     │               │                  │                  │
-     │ 17. WebSocket │                  │                  │
-     │     notify    │                  │                  │
-     │◀──────────────┤                  │                  │
-     │               │                  │                  │
-     │ 18. GET       │                  │                  │
-     │ /download     │                  │                  │
-     ├──────────────▶│                  │                  │
-     │               │                  │                  │
-     │               │ 19. Fetch encrypted file            │
-     │               ├────────────────────────────────────▶│
-     │               │                  │                  │
-     │               │ 20. Stream file                     │
-     │               │◀────────────────────────────────────┤
-     │               │                  │                  │
-     │ 21. File +    │                  │                  │
-     │     decrypt   │                  │                  │
-     │     key       │                  │                  │
-     │◀──────────────┤                  │                  │
-     │               │                  │                  │
-     │ 22. Decrypt   │                  │                  │
-     │     on client │                  │                  │
-     │               │                  │                  │
-     ▼               ▼                  ▼                  ▼
-  SUCCESS         SUCCESS            SUCCESS            SUCCESS
+```mermaid
+sequenceDiagram
+    participant B as Buyer
+    participant API as Backend
+    participant BC as Blockchain
+    participant W as Walrus
+    
+    B->>API: 1. POST /purchase
+    API->>BC: 2. create_purchase()
+    BC-->>API: 3. PurchaseRequest created
+    API->>BC: 4. create_escrow(coin)
+    BC-->>API: 5. Escrow created<br/>Funds LOCKED
+    API-->>B: 6. Purchase created
+    
+    Note over API: 7. Queue job (BullMQ)
+    
+    API->>W: 8. Fetch encrypted file
+    W-->>API: 9. Encrypted data
+    Note over API: 10. Re-encrypt with<br/>buyer public key
+    API->>W: 11. Upload re-encrypted
+    W-->>API: 12. Return blob_id
+    
+    API->>BC: 13. complete_purchase()
+    BC-->>API: 14. Purchase status = completed
+    API->>BC: 15. release_escrow()
+    BC-->>API: 16. Transfer SUI to seller
+    
+    API-->>B: 17. WebSocket notify
+    
+    B->>API: 18. GET /download
+    API->>W: 19. Fetch encrypted file
+    W-->>API: 20. Stream file
+    API-->>B: 21. File + decrypt key
+    Note over B: 22. Decrypt on client
+    
+    B->>B: SUCCESS
+    API->>API: SUCCESS
+    BC->>BC: SUCCESS
+    W->>W: SUCCESS
 ```
 
 **Transaction Stages:**
@@ -1405,26 +1120,103 @@ tail -f logs/combined.log
 
 ### Entity Relationship Diagram
 
-```
-User (Buyer/Seller)
-  │
-  ├──< DataPods (1:N)
-  ├──< PurchaseRequests (1:N)
-  ├──< Reviews (1:N)
-  ├──< UploadStagings (1:N)
-  ├──< EscrowTransactions (1:N)
-  └──< AiConversations (1:N)
-
-DataPod
-  │
-  ├──< PurchaseRequests (1:N)
-  ├──< Reviews (1:N)
-  └──< UploadStaging (1:1)
-
-PurchaseRequest
-  │
-  ├──< EscrowTransaction (1:1)
-  └──< Review (1:1)
+```mermaid
+erDiagram
+    User ||--o{ DataPod : "creates"
+    User ||--o{ PurchaseRequest : "makes"
+    User ||--o{ Review : "writes"
+    User ||--o{ UploadStaging : "uploads"
+    User ||--o{ EscrowTransaction : "participates"
+    User ||--o{ AiConversation : "has"
+    
+    DataPod ||--o{ PurchaseRequest : "purchased via"
+    DataPod ||--o{ Review : "receives"
+    DataPod ||--|| UploadStaging : "staged from"
+    
+    PurchaseRequest ||--|| EscrowTransaction : "has"
+    PurchaseRequest ||--|| Review : "reviewed by"
+    
+    User {
+        uuid id PK
+        string zkloginAddress UK
+        string walletAddress UK
+        string googleEmail UK
+        string username
+        string bio
+        string avatarUrl
+        int totalSales
+        decimal totalRevenue
+        decimal averageRating
+        int reputationScore
+        boolean isVerified
+        datetime createdAt
+        datetime updatedAt
+    }
+    
+    DataPod {
+        uuid id PK
+        string datapodId
+        uuid sellerId FK
+        string title
+        text description
+        string category
+        array tags
+        decimal priceSui
+        string dataHash UK
+        int totalSales
+        decimal averageRating
+        string status
+        string blobId
+        string kioskId
+        datetime publishedAt
+        datetime createdAt
+        datetime updatedAt
+        datetime deletedAt
+    }
+    
+    PurchaseRequest {
+        uuid id PK
+        string purchaseRequestId
+        uuid datapodId FK
+        uuid buyerId FK
+        string buyerAddress
+        string sellerAddress
+        string buyerPublicKey
+        decimal priceSui
+        string status
+        string encryptedBlobId
+        string decryptionKey
+        string txDigest
+        datetime completedAt
+        datetime createdAt
+        datetime updatedAt
+    }
+    
+    Review {
+        uuid id PK
+        uuid datapodId FK
+        uuid purchaseRequestId FK_UK
+        uuid buyerId FK
+        string buyerAddress
+        int rating
+        text comment
+        datetime createdAt
+    }
+    
+    EscrowTransaction {
+        uuid id PK
+        uuid purchaseRequestId FK_UK
+        uuid sellerId FK
+        string sellerAddress
+        string buyerAddress
+        decimal amountSui
+        string escrowObjectId
+        string status
+        string txDigest
+        datetime releasedAt
+        datetime createdAt
+        datetime updatedAt
+    }
 ```
 
 ### Core Models
