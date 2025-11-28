@@ -1,5 +1,26 @@
 # SourceNet - Decentralized Data Marketplace
 
+<div align="center">
+
+![SourceNet Logo](./public/sourcenet.png)
+
+**A Decentralized Data Marketplace Built on SUI Blockchain**
+
+[![Express.js](https://img.shields.io/badge/Express.js-4.18.2-black)](https://expressjs.com/)
+[![Move](https://img.shields.io/badge/Move-1.0-black)](https://move-language.org/)
+[![Redis](https://img.shields.io/badge/Redis-7.2-black)](https://redis.io/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-black)](https://www.postgresql.org/)
+[![WebSocket](https://img.shields.io/badge/WebSocket-1.0-black)](https://websocket.org/)
+[![BullMQ](https://img.shields.io/badge/BullMQ-1.0-black)](https://github.com/RedisBull/bullmq)
+[![Node.js](https://img.shields.io/badge/Node.js-20.11.0-black)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org/)
+[![SUI](https://img.shields.io/badge/SUI-Testnet-6FBCF0)](https://sui.io/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+</div>
+
+---
+
 SourceNet is a decentralized data marketplace built on **Sui Blockchain** with **Walrus Protocol** for secure, decentralized data storage. This platform enables data sellers to monetize their datasets and buyers to securely purchase and access data through blockchain-powered escrow and encryption.
 
 ---
