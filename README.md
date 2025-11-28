@@ -34,8 +34,8 @@ SourceNet is a decentralized data marketplace built on **Sui Blockchain** with *
 - [📄 License](#-license)
 
 ---
-Frontend: [SourceNet Frontend](https://github.com/HusseinHato/sourcenet_fe)
-Landing Page: [SourceNet Landing Page](https://github.com/pramadanif/sourcenet-walrushackathon-sui)
+Frontend Repo: [SourceNet Frontend](https://github.com/HusseinHato/sourcenet_fe)
+Landing Page Repo: [SourceNet Landing Page](https://github.com/pramadanif/sourcenet-walrushackathon-sui)
 Docs: [SourceNet Docs](https://sourcenet.vercel.app/docs)
 
 ## 🌐 Architecture Overview
