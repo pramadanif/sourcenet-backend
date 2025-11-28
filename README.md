@@ -1195,7 +1195,7 @@ erDiagram
     Review {
         uuid id PK
         uuid datapodId FK
-        uuid purchaseRequestId FK_UK
+        uuid purchaseRequestId FK "Unique"
         uuid buyerId FK
         string buyerAddress
         int rating
@@ -1205,7 +1205,7 @@ erDiagram
     
     EscrowTransaction {
         uuid id PK
-        uuid purchaseRequestId FK_UK
+        uuid purchaseRequestId FK "Unique"
         uuid sellerId FK
         string sellerAddress
         string buyerAddress
