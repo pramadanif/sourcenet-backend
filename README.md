@@ -14,7 +14,7 @@
 [![BullMQ](https://img.shields.io/badge/BullMQ-1.0-black)](https://github.com/RedisBull/bullmq)
 [![Node.js](https://img.shields.io/badge/Node.js-20.11.0-black)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org/)
-[![SUI](https://img.shields.io/badge/SUI-Testnet-6FBCF0)](https://sui.io/)
+[![SUI](https://img.shields.io/badge/SUI-Devnet-6FBCF0)](https://sui.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
