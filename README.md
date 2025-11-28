@@ -71,7 +71,7 @@ SourceNet follows a microservices-oriented architecture:
 
 ## 🤖 AI Integration
 
-SourceNet integrates **AI-powered assistance** using **Deepseek V3** (via OpenRouter) to help users navigate the platform, understand DataPods, and make informed decisions.
+SourceNet integrates **AI-powered assistance** using **OpenAI** (via OpenRouter) to help users navigate the platform, understand DataPods, and make informed decisions.
 
 ### Key Features
 
@@ -134,13 +134,13 @@ POST /api/ai/chat
 ┌───────────────────────┐
 │   AI Service          │
 │  - Context build      │
-│  - DEEPSEEK V3 call   │
+│  - OpenAI call   │
 └──────┬────────────────┘
        │
        ▼
 ┌──────────────────┐      ┌──────────────┐
 │   PostgreSQL     │      │  OpenRouter  │
-│  - Conversations │◄────►│  (Deepseek-V3)     │
+│  - Conversations │◄────►│  (OpenAI)     │
 │  - Messages      │      └──────────────┘
 └──────────────────┘
 ```
